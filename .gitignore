@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env*
+!.env.example
+.private/
+.impeccable/review/
+*.tsbuildinfo
+.vercel/
