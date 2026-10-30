@@ -7,6 +7,7 @@ import {
 } from "@webav/av-cliper";
 import {
   activeSegments,
+  dubPlacement,
   duration,
   placement,
   takeFor,
@@ -159,7 +160,10 @@ export async function fitAudio(id: string, target: number) {
   const key = id + ":" + target.toFixed(4);
   if (stretched.has(key)) return stretched.get(key)!;
   const rate = b.duration / target,
-    modulePath = "/vendor/soundtouch/soundtouch.js",
+    modulePath = new URL(
+      "/vendor/soundtouch/soundtouch.js",
+      window.location.href,
+    ).href,
     { SoundTouch, SimpleFilter } = await import(/* @vite-ignore */ modulePath),
     st = new SoundTouch();
   st.tempo = rate;
@@ -236,13 +240,14 @@ export async function mixAudio(p: Project): Promise<AudioBuffer> {
       s.fit === "fit"
         ? await fitAudio(t.assetId, s.sourceEnd - s.sourceStart)
         : await decode(t.assetId);
-    const start = at.start + s.dubOffset,
-      offset = at.cut,
-      len = s.fit === "fit" ? at.end - at.start : b.duration - offset;
+    const pos = dubPlacement(p, s)!;
+    const start = pos.start,
+      offset = pos.offset,
+      len = pos.length;
     add(b, start, offset, len, s.gain * p.dubVolume);
     dubIntervals.push({
-      start: Math.max(at.start, start),
-      end: Math.min(end, s.fit === "fit" ? at.end + s.dubOffset : start + len),
+      start,
+      end: Math.min(end, pos.end),
     });
   }
   if (p.originalMode !== "mute" && p.originalVolume > 0)

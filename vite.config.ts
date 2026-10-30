@@ -11,6 +11,11 @@ export default defineConfig({
           gateway(req, res);
         });
       },
+      configurePreviewServer(server) {
+        server.middlewares.use("/api/gateway", (req, res) => {
+          gateway(req, res);
+        });
+      },
     },
   ],
   server: { port: 5173 },

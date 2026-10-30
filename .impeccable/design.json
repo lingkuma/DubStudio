@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-31T00:54:00+08:00",
+  "title": "Design System: DubStudio",
+  "extensions": {
+    "breakpoints": [
+      { "name": "wide", "minWidth": "1600px" },
+      { "name": "compact", "maxWidth": "1150px" },
+      { "name": "drawer", "maxWidth": "900px" },
+      { "name": "stacked", "maxWidth": "650px" }
+    ],
+    "motion": [
+      {
+        "name": "control",
+        "duration": "150ms",
+        "easing": "ease",
+        "purpose": "Control hover feedback"
+      },
+      {
+        "name": "task-spinner",
+        "duration": "1s",
+        "easing": "linear",
+        "purpose": "Running task only"
+      }
+    ],
+    "elevation": [
+      { "name": "toast", "css": "0 5px 25px #2739571c" },
+      { "name": "dialog", "css": "0 15px 65px #19294238" }
+    ],
+    "rules": [
+      "Real media is the focal surface",
+      "Blue identifies primary actions and active state",
+      "Selection links transcript, preview and timeline",
+      "Narration and subtitles can be edited independently"
+    ]
+  }
+}

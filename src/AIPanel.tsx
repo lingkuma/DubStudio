@@ -210,15 +210,17 @@ export default function AIPanel({
             <strong>{draft.result.edits.length} 句修改建议</strong>
             <p className="meta">时间戳保持不变。字数差异可用于判断配音长度。</p>
             {draft.result.edits.map((e) => {
-              const s = p.segments.find((s) => s.id === e.id)!;
+              const s = p.segments.find((s) => s.id === e.id);
+              const old =
+                s?.text || JSON.parse(draft.before[e.id] || '["",""]')[0];
               const next = e.text ?? e.subtitle ?? "";
               return (
                 <div className="diff-row" key={e.id}>
                   <small>
                     第 {activeSegments(p).findIndex((s) => s.id === e.id) + 1}{" "}
-                    句 · {[...s.text].length} → {[...next].length} 字
+                    句 · {[...old].length} → {[...next].length} 字
                   </small>
-                  <del>{s.text}</del>
+                  <del>{old}</del>
                   <ins>{next}</ins>
                 </div>
               );
@@ -242,7 +244,7 @@ export default function AIPanel({
             )}
             <button
               className="primary"
-              disabled={!!busy}
+              disabled={!!busy || !draft.result.edits.length}
               onClick={() => apply(false)}
             >
               <Check size={15} />

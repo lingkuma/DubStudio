@@ -999,6 +999,7 @@ textarea {
   border-right: 1px solid var(--line);
   background: #fff;
   z-index: 2;
+  overflow: hidden;
 }
 .track-ruler {
   height: 32px;
@@ -1008,6 +1009,9 @@ textarea {
   font-size: 9px;
   color: #8893a5;
   border-bottom: 1px solid var(--line);
+  position: relative;
+  z-index: 2;
+  background: white;
 }
 .track-label {
   height: 42px;
@@ -1455,9 +1459,6 @@ textarea {
   .header-divider {
     margin: 0 3px;
   }
-  .right-panel:focus-within {
-    display: flex;
-  }
   .media-toolbar .meta {
     display: none;
   }
@@ -1620,4 +1621,21 @@ textarea {
 }
 .inspector-lock .inspector {
   overflow: visible;
+}
+.meta,
+.help,
+.original-text,
+.segment-time,
+.segment-actions > span,
+.segment-status,
+.project-title > span,
+.preview-hint,
+.ai-welcome p,
+.transcript-footer {
+  color: #647188;
+}
+@media (max-width: 900px) {
+  .right-panel {
+    height: auto;
+  }
 }

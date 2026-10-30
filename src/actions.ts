@@ -8,7 +8,7 @@ import {
   uid,
   type Segment,
 } from "./model";
-import { asrAudio, decode, registerMedia, renderVideo } from "./media";
+import { asrAudio, decode, registerMedia, renderVideo, wav } from "./media";
 import { download, getMedia, mediaUrl } from "./storage";
 import { pollTts, submitTts, transcribe } from "./providers";
 let controller: AbortController | null = null;
@@ -154,6 +154,10 @@ export async function recognize() {
   });
 }
 export async function generate(ids: string[], resume = false) {
+  if (!ids.length) {
+    report("没有需要生成的句子");
+    return 0;
+  }
   return task("准备克隆配音", async (signal) => {
     const projectId = useStudio.getState().project.id;
     let completed = 0;
@@ -189,7 +193,19 @@ export async function generate(ids: string[], resume = false) {
         useStudio
           .getState()
           .set({ busy: "克隆配音 " + (completed + 1) + " / " + ids.length });
-        const blob = await pollTts(jobId, state.settings, () => {}, signal);
+        const blob = await pollTts(
+          jobId,
+          state.settings,
+          (status) => {
+            if (["FAILED", "FAILURE", "ERROR", "CANCELLED"].includes(status)) {
+              useStudio.getState().edit((p) => {
+                const row = p.segments.find((s) => s.id === id);
+                if (row) row.taskId = undefined;
+              }, false);
+            }
+          },
+          signal,
+        );
         if (useStudio.getState().project.id !== projectId)
           throw new Error("工程已切换");
         const asset = await registerMedia(
@@ -244,7 +260,10 @@ export async function exportVideo() {
   return task("准备导出视频", async (signal) => {
     const p = structuredClone(useStudio.getState().project);
     const stale = activeSegments(p).filter(
-      (s) => takeFor(s) && takeFor(s)!.text !== s.text,
+      (s) =>
+        takeFor(s) &&
+        !s.muted &&
+        (takeFor(s)!.text !== s.text || takeFor(s)!.voiceId !== s.voiceId),
     );
     if (stale.length)
       throw new Error(
@@ -277,7 +296,6 @@ export async function voiceFromSegment(id: string) {
   source.connect(context.destination);
   source.start(0, s.sourceStart, len);
   const out = await context.startRendering();
-  const { wav } = await import("./media");
   await addVoice(
     new File([wav(out)], "原声参考 " + s.original.slice(0, 10) + ".wav", {
       type: "audio/wav",

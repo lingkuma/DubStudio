@@ -66,6 +66,7 @@ export function parseAI(content: string, p: Project): AIResult {
     throw new Error("AI 返回的结构无效，未应用修改");
   const edits: AIEdit[] = [];
   for (const e of d.edits || []) {
+    if (!e || typeof e !== "object") throw new Error("AI 句子修改格式无效");
     if (!ids.has(e.id))
       throw new Error("AI 返回了不存在的句子 ID，未应用任何修改");
     if (edits.some((v) => v.id === e.id))
@@ -84,6 +85,7 @@ export function parseAI(content: string, p: Project): AIResult {
   }
   const actions: AIAction[] = [];
   for (const a of d.actions || []) {
+    if (!a || typeof a !== "object") throw new Error("AI 操作格式无效");
     if (!["generate", "export", "seek", "split", "remove"].includes(a.type))
       throw new Error("AI 返回不支持的操作");
     if (

@@ -364,7 +364,8 @@ export default function App() {
                 take = takeFor(s),
                 index = rows.findIndex((x) => x.id === s.id),
                 active = time >= at.start && time < at.end,
-                stale = take && take.text !== s.text;
+                stale =
+                  take && (take.text !== s.text || take.voiceId !== s.voiceId);
               return (
                 <article
                   key={s.id}
@@ -504,7 +505,13 @@ export default function App() {
               onClick={() =>
                 generate(
                   rows
-                    .filter((s) => !takeFor(s) || takeFor(s)!.text !== s.text)
+                    .filter(
+                      (s) =>
+                        !s.muted &&
+                        (!takeFor(s) ||
+                          takeFor(s)!.text !== s.text ||
+                          takeFor(s)!.voiceId !== s.voiceId),
+                    )
                     .map((s) => s.id),
                 )
               }

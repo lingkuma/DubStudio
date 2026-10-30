@@ -7,6 +7,7 @@ import {
   removeVideo,
   srt,
   parseSrt,
+  dubPlacement,
 } from "./model";
 import { parseAI } from "./ai";
 function fixture() {
@@ -66,6 +67,28 @@ describe("source / timeline mapping", () => {
     p.segments[0].subtitle = "新字幕";
     const parsed = parseSrt(srt(p));
     expect(parsed).toEqual([{ start: 12, end: 17, text: "新字幕" }]);
+  });
+  it("natural duration shows and mixes the same interval and stops at a cut", () => {
+    const p = fixture(),
+      s = p.segments[0];
+    s.fit = "natural";
+    s.takeId = "t";
+    s.takes = [
+      {
+        id: "t",
+        assetId: "voice",
+        duration: 8,
+        text: s.text,
+        voiceId: "v",
+        created: 0,
+      },
+    ];
+    expect(dubPlacement(p, s)).toMatchObject({ start: 12, end: 20, length: 8 });
+    splitVideo(p, "v1", 14);
+    expect(p.segments.map((s) => dubPlacement(p, s))).toEqual([
+      expect.objectContaining({ start: 12, end: 14, length: 2 }),
+      expect.objectContaining({ start: 14, end: 20, offset: 2 }),
+    ]);
   });
 });
 describe("AI proposal validation", () => {

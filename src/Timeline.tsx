@@ -20,6 +20,7 @@ import { useStudio } from "./store";
 import {
   activeSegments,
   duration,
+  dubPlacement,
   placement,
   removeVideo,
   splitVideo,
@@ -33,6 +34,7 @@ export default function EditorTimeline() {
     [zoom, setZoom] = useState(60),
     [snap, setSnap] = useState(true),
     [height, setHeight] = useState(300);
+  const labelsRef = useRef<HTMLDivElement>(null);
   const rows = useMemo<TimelineRow[]>(
     () => [
       {
@@ -58,11 +60,12 @@ export default function EditorTimeline() {
       {
         id: "dub",
         actions: activeSegments(p).map((s) => {
-          const at = placement(p, s)!;
+          const at = placement(p, s)!,
+            dub = dubPlacement(p, s);
           return {
             id: "d:" + s.id,
-            start: Math.max(0, at.start + s.dubOffset),
-            end: at.end + s.dubOffset,
+            start: dub?.start ?? Math.max(0, at.start + s.dubOffset),
+            end: dub?.end ?? at.end + s.dubOffset,
             effectId: "dub",
             flexible: false,
           };
@@ -238,7 +241,7 @@ export default function EditorTimeline() {
         </button>
       </div>
       <div className="timeline-body">
-        <div className="track-labels">
+        <div className="track-labels" ref={labelsRef}>
           <div className="track-ruler">轨道</div>
           {track.map(([id, label, Icon]) => (
             <div className={"track-label " + id} key={id}>
@@ -296,6 +299,13 @@ export default function EditorTimeline() {
             disableDrag={!!busy}
             autoScroll
             autoReRender={false}
+            onScroll={({ scrollTop }) => {
+              labelsRef.current
+                ?.querySelectorAll<HTMLElement>(".track-label")
+                .forEach((el) => {
+                  el.style.transform = "translateY(-" + scrollTop + "px)";
+                });
+            }}
             onClickTimeArea={(t) => {
               set({
                 time: Math.min(duration(p), Math.max(0, t)),

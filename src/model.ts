@@ -170,6 +170,24 @@ export const duration = (p: Project) =>
     ...p.music.map((c) => c.start + c.out - c.in),
   );
 export const takeFor = (s: Segment) => s.takes.find((t) => t.id === s.takeId);
+export function dubPlacement(p: Project, s: Segment) {
+  const at = placement(p, s),
+    take = takeFor(s),
+    clip = p.videos.find((v) => v.id === s.clipId);
+  if (!at || !take || !clip) return null;
+  const begin = at.start + s.dubOffset,
+    clipEnd = clip.start + clip.out - clip.in;
+  const end =
+    s.fit === "fit" || clip.out < s.sourceEnd
+      ? at.end + s.dubOffset
+      : Math.min(clipEnd, begin + take.duration - at.cut);
+  return {
+    start: Math.max(0, begin),
+    end: Math.max(0, end),
+    offset: at.cut + Math.max(0, -begin),
+    length: Math.max(0, end - Math.max(0, begin)),
+  };
+}
 export function placement(p: Project, s: Segment) {
   const c = p.videos.find((v) => v.id === s.clipId);
   if (!c) return null;

@@ -61,9 +61,38 @@ export async function importProject(file: File): Promise<Project> {
     p.version !== 1 ||
     !Array.isArray(p.assets) ||
     !Array.isArray(p.videos) ||
-    !Array.isArray(p.segments)
+    !Array.isArray(p.segments) ||
+    !Array.isArray(p.voices) ||
+    !Array.isArray(p.music) ||
+    !Number.isFinite(p.width) ||
+    !Number.isFinite(p.height) ||
+    p.width < 2 ||
+    p.height < 2 ||
+    p.width > 7680 ||
+    p.height > 7680
   )
     throw new Error("工程版本或格式不受支持");
+  const assets = new Set(p.assets.map((a) => a.id)),
+    clips = new Set(p.videos.map((v) => v.id));
+  for (const clip of [...p.videos, ...p.music])
+    if (
+      !assets.has(clip.assetId) ||
+      ![clip.start, clip.in, clip.out].every(Number.isFinite) ||
+      clip.start < 0 ||
+      clip.in < 0 ||
+      clip.out <= clip.in
+    )
+      throw new Error("工程包含无效的时间轴片段");
+  for (const s of p.segments)
+    if (
+      !clips.has(s.clipId) ||
+      !Array.isArray(s.takes) ||
+      typeof s.text !== "string" ||
+      typeof s.subtitle !== "string" ||
+      ![s.sourceStart, s.sourceEnd].every(Number.isFinite) ||
+      s.sourceEnd <= s.sourceStart
+    )
+      throw new Error("工程包含无效的字幕分段");
   for (const a of p.assets) {
     if (!files["media/" + a.id]) throw new Error("工程缺少素材：" + a.name);
     await putMedia(

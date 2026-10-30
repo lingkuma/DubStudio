@@ -33,7 +33,13 @@ for (const name of [
   "fflate",
   "lucide-react",
 ]) {
-  for (const candidate of ["LICENSE", "LICENSE.txt", "LICENSE.md"]) {
+  for (const candidate of [
+    "LICENSE",
+    "LICENSE.txt",
+    "LICENSE.md",
+    "LICENCE",
+    "LICENCE.txt",
+  ]) {
     try {
       await fs.copyFile(
         path.join("node_modules", name, candidate),
