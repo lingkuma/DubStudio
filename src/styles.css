@@ -1129,6 +1129,62 @@ textarea {
   flex: 1;
   min-width: 0;
 }
+.timeline-editor.timeline-surface {
+  width: 100%;
+  height: 100%;
+}
+.timeline-surface .timeline-editor-time-area {
+  touch-action: none;
+  cursor: ew-resize;
+}
+.timeline-surface .timeline-editor-time-area canvas {
+  display: block;
+  width: 100%;
+  height: 32px;
+}
+.timeline-surface .timeline-editor-edit-area {
+  margin-top: 0;
+}
+.timeline-scroll {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.timeline-scroll::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+.timeline-content {
+  min-height: 100%;
+  position: relative;
+}
+.timeline-surface .timeline-editor-edit-row {
+  background-image: none;
+}
+.timeline-surface .timeline-editor-cursor {
+  width: 1px;
+  left: 0;
+  top: 32px;
+  height: calc(100% - 32px);
+  transform: none;
+  border-left: 1px solid #e27567;
+  border-right: 0;
+  pointer-events: none;
+}
+.timeline-surface .timeline-editor-cursor-area {
+  top: -12px;
+  height: 16px;
+  touch-action: none;
+}
+.timeline-surface .timeline-editor-cursor-top {
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  border-top: 9px solid #e27567;
+  transform: translateX(-50%);
+}
 .timeline-editor {
   background: #fff !important;
   color: #69768a !important;

@@ -1,5 +1,40 @@
 export const clampZoom = (value: number) => Math.max(20, Math.min(240, value));
 
+// A wheel notch can arrive as one large delta. Spread it over a short, linear
+// interval; the destination still depends only on input, not rendering speed.
+export class LinearZoomMotion {
+  private from: number;
+  private started = 0;
+  target: number;
+  constructor(
+    value: number,
+    private duration = 80,
+  ) {
+    this.from = this.target = value;
+  }
+  value(now: number) {
+    const progress = Math.max(
+      0,
+      Math.min(1, (now - this.started) / this.duration),
+    );
+    return this.from + (this.target - this.from) * progress;
+  }
+  moveTo(value: number, now: number) {
+    this.from = this.value(now);
+    this.target = clampZoom(value);
+    this.started = now;
+  }
+  wheel(delta: number, mode: number, pageHeight: number, now: number) {
+    this.moveTo(wheelZoom(this.target, delta, mode, pageHeight), now);
+  }
+  reset(value: number) {
+    this.from = this.target = clampZoom(value);
+  }
+  done(now: number) {
+    return now - this.started >= this.duration || this.from === this.target;
+  }
+}
+
 export function wheelZoom(
   value: number,
   delta: number,
@@ -34,9 +69,9 @@ export function anchoredZoom(
   const nextScroll =
     nextZoom > zoom
       ? Math.max(0, requestedScroll)
-      : scroll <= 1
+      : scroll <= 0.000001
         ? 0
-        : scroll >= oldMax - 1
+        : scroll >= oldMax - 0.000001
           ? nextMax
           : Math.max(0, Math.min(nextMax, requestedScroll));
   return {

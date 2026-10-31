@@ -5,6 +5,7 @@ import {
   dragRange,
   snapRange,
   wheelZoom,
+  LinearZoomMotion,
 } from "./timelineInteraction";
 
 const range = { start: 2, end: 6 },
@@ -51,6 +52,37 @@ describe("timeline pointer geometry", () => {
   });
 });
 describe("continuous wheel zoom", () => {
+  it("interpolates a mouse notch linearly with the same destination at any frame rate", () => {
+    const motion = new LinearZoomMotion(60);
+    motion.wheel(-100, 0, 800, 1000);
+    expect(motion.value(1000)).toBe(60);
+    expect(motion.value(1020)).toBe(63);
+    expect(motion.value(1040)).toBe(66);
+    expect(motion.value(1060)).toBe(69);
+    expect(motion.value(1080)).toBe(72);
+    expect(motion.value(1200)).toBe(72);
+    expect(motion.done(1080)).toBe(true);
+  });
+  it("accumulates every input even when several events arrive before a frame", () => {
+    for (const interval of [0, 4, 16, 100]) {
+      const motion = new LinearZoomMotion(60);
+      for (let i = 0; i < 20; i++)
+        motion.wheel(-2, 0, 800, 1000 + i * interval);
+      expect(motion.target).toBeCloseTo(64.8);
+      expect(motion.value(3000)).toBeCloseTo(64.8);
+    }
+  });
+  it("does not lose input when reversing before the animation finishes", () => {
+    const motion = new LinearZoomMotion(60);
+    motion.wheel(-100, 0, 800, 1000);
+    motion.wheel(100, 0, 800, 1040);
+    expect(motion.value(1040)).toBe(66);
+    expect(motion.value(1080)).toBe(63);
+    expect(motion.value(1120)).toBe(60);
+    motion.reset(240);
+    motion.wheel(-100, 0, 800, 1200);
+    expect(motion.value(1400)).toBe(240);
+  });
   it("uses equal zoom increments for equal wheel deltas, independent of current zoom", () => {
     expect(wheelZoom(60, -10, 0, 800) - 60).toBeCloseTo(
       wheelZoom(120, -10, 0, 800) - 120,
@@ -62,6 +94,15 @@ describe("continuous wheel zoom", () => {
         const view = anchoredZoom(60, 0, 500, next, total, 1000);
         expect(view).toEqual({ zoom: next, origin: 12, scroll: 0 });
       }
+  });
+  it("keeps subpixel anchors near an edge instead of snapping within a whole pixel", () => {
+    for (const scroll of [0.8, maxTimelineScroll(60, 180, 1000) - 0.5]) {
+      const view = anchoredZoom(60, scroll, 200, 59.99, 180, 1000);
+      expect(((view.scroll + 200 - 12) * 5) / view.zoom).toBeCloseTo(
+        ((scroll + 200 - 12) * 5) / 60,
+        10,
+      );
+    }
   });
   it("pins the right edge only on zoom out and switches to left when the project fits", () => {
     for (const next of [20, 59.7]) {

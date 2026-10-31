@@ -8,8 +8,7 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
-import "./timelineGrid";
-import { Timeline, type TimelineState } from "@xzdarcy/react-timeline-editor";
+import TimelineSurface, { type TimelineSurfaceState } from "./TimelineSurface";
 import type { TimelineRow } from "@xzdarcy/timeline-engine";
 import "@xzdarcy/react-timeline-editor/dist/react-timeline-editor.css";
 import {
@@ -44,23 +43,16 @@ import {
   dragRange,
   anchoredZoom,
   snapRange,
-  wheelZoom,
+  LinearZoomMotion,
   type DragKind,
 } from "./timelineInteraction";
-const effects = {
-  video: { id: "video", name: "video" },
-  original: { id: "original", name: "original" },
-  dub: { id: "dub", name: "dub" },
-  subtitle: { id: "subtitle", name: "subtitle" },
-  music: { id: "music", name: "music" },
-};
 function EditorTimeline() {
   const p = useStudio((s) => s.project),
     selected = useStudio((s) => s.selected),
     busy = useStudio((s) => s.busy),
     edit = useStudio((s) => s.edit),
     set = useStudio((s) => s.set),
-    ref = useRef<TimelineState>(null),
+    ref = useRef<TimelineSurfaceState>(null),
     [viewport, setViewport] = useState({ zoom: 60, origin: 12 }),
     [snap, setSnap] = useState(true),
     [height, setHeight] = useState(() =>
@@ -72,7 +64,9 @@ function EditorTimeline() {
   const labelsRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const scrollLeftRef = useRef(0);
-  const zoomScrollRef = useRef<number | null>(null);
+  const zoomMotion = useRef(new LinearZoomMotion(60));
+  const zoomFrame = useRef(0);
+  const zoomAnchor = useRef(0);
   const pendingScroll = useRef<number | null>(null);
   const dragged = useRef(false);
   const interaction = useRef<{ cancel: () => void } | null>(null);
@@ -83,81 +77,65 @@ function EditorTimeline() {
   const total = useMemo(() => duration(p), [p]);
   const geometryRef = useRef({ total, width: viewportWidth });
   geometryRef.current = { total, width: viewportWidth };
-  // Keep labels readable at every zoom while preserving the pixels/second ratio.
-  const scale = 1;
-  const labelStep = zoom < 40 ? 15 : zoom < 80 ? 5 : zoom < 160 ? 2 : 1;
-  const scaleWidth = (zoom / 5) * scale;
-  const changeZoom = (value: number) => {
-    if (interaction.current) return;
-    const grid = sectionRef.current?.querySelector<HTMLElement>(
-      ".timeline-editor-edit-area .ReactVirtualized__Grid",
-    );
+  const paintZoom = (next: number, x: number) => {
+    const current = viewportRef.current;
+    if (Math.abs(next - current.zoom) < 0.000001) return;
     const view = anchoredZoom(
-      zoom,
-      grid?.scrollLeft ?? scrollLeftRef.current,
-      viewportWidth / 2,
-      value,
-      total,
-      viewportWidth,
+      current.zoom,
+      ref.current?.getScrollLeft() ?? scrollLeftRef.current,
+      x,
+      next,
+      geometryRef.current.total,
+      geometryRef.current.width,
     );
     pendingScroll.current = view.scroll;
-    zoomScrollRef.current = view.scroll;
-    setViewport({ zoom: value, origin: 12 });
+    viewportRef.current = { zoom: view.zoom, origin: view.origin };
+    flushSync(() => setViewport(viewportRef.current));
+  };
+  const tickZoom = (now: number) => {
+    zoomFrame.current = 0;
+    paintZoom(zoomMotion.current.value(now), zoomAnchor.current);
+    if (!zoomMotion.current.done(now))
+      zoomFrame.current = requestAnimationFrame(tickZoom);
+  };
+  const changeZoom = (value: number) => {
+    if (interaction.current) return;
+    cancelAnimationFrame(zoomFrame.current);
+    zoomFrame.current = 0;
+    zoomMotion.current.reset(value);
+    paintZoom(value, geometryRef.current.width / 2);
   };
   useEffect(() => {
     const section = sectionRef.current;
     if (!section) return;
     const canvas = section.querySelector<HTMLElement>(".timeline-canvas");
+    const scroll = canvas?.querySelector<HTMLElement>(".timeline-scroll");
     const resize = new ResizeObserver(() => {
-      if (canvas) setViewportWidth(canvas.clientWidth);
+      if (scroll) setViewportWidth(scroll.clientWidth);
     });
-    if (canvas) resize.observe(canvas);
+    if (scroll) resize.observe(scroll);
     const zoomOnWheel = (event: WheelEvent) => {
       if (!event.ctrlKey || event.deltaY === 0) return;
       event.preventDefault();
       event.stopPropagation();
-      if (interaction.current) return;
-      if (!canvas) return;
-      const current = viewportRef.current;
-      const next = wheelZoom(
-        current.zoom,
-        event.deltaY,
-        event.deltaMode,
-        section.clientHeight,
-      );
-      if (next === current.zoom) return;
-      const x = Math.max(
+      if (interaction.current || !canvas) return;
+      zoomAnchor.current = Math.max(
         0,
         Math.min(
-          canvas.clientWidth,
+          scroll?.clientWidth ?? canvas.clientWidth,
           event.clientX - canvas.getBoundingClientRect().left,
         ),
       );
-      const grid = canvas.querySelector<HTMLElement>(
-        ".timeline-editor-edit-area .ReactVirtualized__Grid",
+      zoomMotion.current.wheel(
+        event.deltaY,
+        event.deltaMode,
+        section.clientHeight,
+        performance.now(),
       );
-      const actualScroll = grid?.scrollLeft ?? scrollLeftRef.current;
-      // Browsers round scrollLeft to pixels. Preserve the fractional remainder
-      // across small wheel deltas instead of losing it at every input event.
-      const logicalScroll = zoomScrollRef.current;
-      const view = anchoredZoom(
-        current.zoom,
-        logicalScroll !== null && Math.abs(logicalScroll - actualScroll) <= 1
-          ? logicalScroll
-          : actualScroll,
-        x,
-        next,
-        geometryRef.current.total,
-        canvas.clientWidth,
-      );
-      pendingScroll.current = view.scroll;
-      zoomScrollRef.current = view.scroll;
-      // Commit scale, origin and scroll before handling another wheel event.
-      // No easing or delayed frames: equal wheel deltas give equal zoom changes.
-      flushSync(() => setViewport({ zoom: view.zoom, origin: view.origin }));
+      // Coalesce the input stream into one atomic geometry update per frame.
+      if (!zoomFrame.current)
+        zoomFrame.current = requestAnimationFrame(tickZoom);
     };
-    // React's wheel listeners are passive; use a native listener so Ctrl+wheel
-    // scales the timeline instead of triggering the browser's page zoom.
     section.addEventListener("wheel", zoomOnWheel, {
       passive: false,
       capture: true,
@@ -165,6 +143,7 @@ function EditorTimeline() {
     return () => {
       section.removeEventListener("wheel", zoomOnWheel, true);
       resize.disconnect();
+      cancelAnimationFrame(zoomFrame.current);
       interaction.current?.cancel();
     };
   }, []);
@@ -273,9 +252,7 @@ function EditorTimeline() {
         })),
       },
     ],
-    // New row identity invalidates the virtualized grid's scrolling cache.
-    // Otherwise blocks can keep the previous zoom for the scroll debounce.
-    [p, segments, total, viewport],
+    [p, segments, total],
   );
   useEffect(() => {
     ref.current?.setTime(useStudio.getState().time);
@@ -331,12 +308,14 @@ function EditorTimeline() {
     });
   };
   const beginDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    zoomScrollRef.current = null;
+    cancelAnimationFrame(zoomFrame.current);
+    zoomFrame.current = 0;
+    zoomMotion.current.reset(viewportRef.current.zoom);
     dragged.current = false;
     if (event.button !== 0 || busy || interaction.current) return;
     const target = event.target as Element;
     const element = target.closest<HTMLElement>(".timeline-editor-action");
-    const grid = element?.closest<HTMLElement>(".ReactVirtualized__Grid");
+    const grid = element?.closest<HTMLElement>(".timeline-scroll");
     const area = element?.closest<HTMLElement>(".timeline-editor-edit-area");
     if (
       !element ||
@@ -653,7 +632,7 @@ function EditorTimeline() {
             )
               return;
             const grid = event.currentTarget.querySelector<HTMLElement>(
-              ".timeline-editor-edit-area .ReactVirtualized__Grid",
+              ".timeline-editor-edit-area .timeline-scroll",
             );
             if (!grid) return;
             const bounds = grid.getBoundingClientRect();
@@ -664,29 +643,20 @@ function EditorTimeline() {
             )
               return;
             const at =
-              ((event.clientX - bounds.left + grid.scrollLeft - origin) * 5) /
+              ((event.clientX -
+                bounds.left +
+                (ref.current?.getScrollLeft() ?? grid.scrollLeft) -
+                origin) *
+                5) /
               zoom;
             set({ time: Math.min(total, Math.max(0, at)), playing: false });
           }}
         >
-          <Timeline
+          <TimelineSurface
             ref={ref}
-            editorData={rows}
-            effects={effects}
-            scale={scale}
-            scaleWidth={scaleWidth}
-            scaleSplitCount={zoom >= 160 ? 5 : zoom >= 80 ? 2 : 1}
-            startLeft={origin}
-            rowHeight={42}
-            minScaleCount={
-              Math.ceil(total / scale + viewportWidth / scaleWidth) + 1
-            }
-            style={{ width: "100%", height: "100%" }}
-            gridSnap={false}
-            dragLine={false}
-            disableDrag
-            autoScroll
-            autoReRender={false}
+            rows={rows}
+            zoom={zoom}
+            duration={total}
             onScroll={({ scrollTop, scrollLeft }) => {
               scrollLeftRef.current = scrollLeft;
               labelsRef.current
@@ -695,30 +665,9 @@ function EditorTimeline() {
                   el.style.transform = "translateY(-" + scrollTop + "px)";
                 });
             }}
-            onClickTimeArea={(t) => {
-              set({
-                time: Math.min(total, Math.max(0, t)),
-                playing: false,
-              });
-              return true;
-            }}
-            onCursorDrag={(t) =>
-              set({
-                time: Math.min(total, Math.max(0, t)),
-                playing: false,
-              })
-            }
-            onClickActionOnly={(e, v) => {
-              e.stopPropagation();
-              select(v.action.id);
-            }}
-            onClickAction={(event) => event.stopPropagation()}
-            getScaleRender={(s) =>
-              s <= total && s % labelStep === 0 ? (
-                <span>{timecode(s)}</span>
-              ) : null
-            }
-            getActionRender={(action, row) => {
+            onSeek={(t) => set({ time: t, playing: false })}
+            onSelect={select}
+            renderAction={(action, row) => {
               const id = action.id.replace(/^[dso]:/, ""),
                 item = items.get(id);
               return (
