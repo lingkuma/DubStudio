@@ -12,6 +12,8 @@ import {
   removeVoice,
   referenceKey,
   canResumeGeneration,
+  resizeSegment,
+  subtitlePlacement,
 } from "./model";
 import { parseAI } from "./ai";
 function fixture() {
@@ -148,6 +150,52 @@ describe("source / timeline mapping", () => {
       expect.objectContaining({ start: 12, end: 14, length: 2 }),
       expect.objectContaining({ start: 14, end: 20, offset: 2 }),
     ]);
+  });
+  it("resizes dubbing independently of subtitles and source recognition", () => {
+    const p = fixture(), s = p.segments[0];
+    resizeSegment(p, s, "dub", 11, 19);
+    expect(dubPlacement(p, s)).toMatchObject({ start: 11, end: 19, length: 8, offset: 0 });
+    expect(subtitlePlacement(p, s)).toMatchObject({ start: 12, end: 17 });
+    expect([s.sourceStart, s.sourceEnd]).toEqual([7, 12]);
+    // The range also exists before a take is generated.
+    s.takeId = "t";
+    s.fit = "natural";
+    s.takes = [{ id: "t", assetId: "voice", duration: 3, text: s.text, voiceId: "", created: 0 }];
+    expect(dubPlacement(p, s)).toMatchObject({ start: 11, end: 19, length: 8 });
+  });
+  it("exports the independently resized subtitle interval", () => {
+    const p = fixture(), s = p.segments[0];
+    resizeSegment(p, s, "subtitle", 10, 20);
+    expect(parseSrt(srt(p))).toEqual([{ start: 10, end: 20, text: "原句" }]);
+    expect(dubPlacement(p, s)).toMatchObject({ start: 12, end: 17 });
+    // Moving keeps the edited length.
+    s.subtitleOffset += 2;
+    expect(subtitlePlacement(p, s)).toMatchObject({ start: 12, end: 22 });
+  });
+  it("keeps stretched audio continuous across a video split", () => {
+    const p = fixture(), s = p.segments[0];
+    resizeSegment(p, s, "dub", 11, 19);
+    resizeSegment(p, s, "subtitle", 11, 19);
+    splitVideo(p, "v1", 14);
+    expect(p.segments.map((s) => dubPlacement(p, s))).toEqual([
+      expect.objectContaining({ start: 11, end: 14, offset: 0, length: 3 }),
+      expect.objectContaining({ start: 14, end: 19, offset: 3, length: 5 }),
+    ]);
+    expect(p.segments.map((s) => subtitlePlacement(p, s))).toEqual([
+      expect.objectContaining({ start: 11, end: 14 }),
+      expect.objectContaining({ start: 14, end: 19 }),
+    ]);
+  });
+  it("rejects invalid resize bounds and retains optional lengths in saved JSON", () => {
+    const p = fixture(), s = p.segments[0];
+    for (const [start, end] of [[-1, 5], [5, 5], [5, 4], [NaN, 7], [5, Infinity]])
+      resizeSegment(p, s, "dub", start, end);
+    expect(s.dubDuration).toBeUndefined();
+    resizeSegment(p, s, "dub", 12, 15);
+    resizeSegment(p, s, "subtitle", 13, 16);
+    const restored = JSON.parse(JSON.stringify(p));
+    expect(dubPlacement(restored, restored.segments[0])).toMatchObject({ start: 12, end: 15 });
+    expect(subtitlePlacement(restored, restored.segments[0])).toMatchObject({ start: 13, end: 16 });
   });
 });
 describe("AI proposal validation", () => {

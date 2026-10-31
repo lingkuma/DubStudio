@@ -90,6 +90,9 @@ export async function importProject(file: File): Promise<Project> {
       typeof s.text !== "string" ||
       typeof s.subtitle !== "string" ||
       ![s.sourceStart, s.sourceEnd].every(Number.isFinite) ||
+      [s.dubDuration, s.subtitleDuration].some(
+        (v) => v !== undefined && (!Number.isFinite(v) || v < 0.04),
+      ) ||
       s.sourceEnd <= s.sourceStart
     )
       throw new Error("工程包含无效的字幕分段");

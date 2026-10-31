@@ -34,7 +34,37 @@ Node.js 22 或更新版本：
 - SRT 使用时间戳建立分段；跨越视频剪辑边界的字幕需要先调整。
 - AI 智能导入给出匹配建议，保留稳定 ID；应用前可逐句检查。
 - 自动保存使用 IndexedDB；「保存」下载包含所有原素材和生成音频的 .dubstudio 工程包，可以在其他设备重新打开。工程包不含 API Key，包含台词与对话历史。
-- API Key 默认保存在会话存储，勾选记住后才保存于 localStorage。
+- API 设置修改后立即自动保存到当前浏览器的 localStorage，包含所有渠道的 API Key；刷新或重新打开仍可使用。
+
+## 配置分享链接
+
+在 API 设置中点击「复制配置分享链接」，即可将当前全部设置（含各渠道 Base URL、Key、连接方式、网关 / Worker 地址、结果下载回退、热词、说话人识别和 AI 模型）分享给朋友。链接使用 `?config=` 加 URL 编码的 JSON。对方打开后自动导入并保存，用 `history.replaceState` 清除配置参数，不刷新页面，也不留下额外的带配置历史条目；收藏当前页面即可得到干净地址。链接包含 Key，请发给你希望使用这些 Key 的朋友。
+
+也可直接拼接参数，仅覆盖提供的字段，其余保留本机已有值。字段值须用 `URLSearchParams` 或 `encodeURIComponent` 编码，尤其是 Key 中的 `+`、`&` 和嵌套代理 URL：
+
+```js
+const params = new URLSearchParams({
+  aliyunKey: "百炼 Key",
+  asrBase: "https://dashscope.aliyuncs.com",
+  "asr.transport": "gateway",
+  "asr.gateway": "/api/gateway",
+  autodlKey: "AutoDL Token",
+  autodlBase: "https://autodl.art",
+  "tts.transport": "direct",
+  "tts.downloadFallback": "true",
+  "tts.gateway": "/api/gateway",
+  aiKey: "AI Key",
+  aiBase: "https://api.example.com/v1",
+  aiModel: "your-model",
+  "ai.transport": "worker",
+  "ai.workerUrl": "https://proxy.example/?url={url}",
+  hotwords: "品牌,人名",
+  diarization: "false",
+});
+const shareUrl = "https://你的站点/?" + params.toString();
+```
+
+三个渠道前缀分别是 `asr`、`tts`、`ai`；每个渠道均支持 `.transport`（`direct` / `gateway` / `worker`）、`.gateway`、`.workerUrl`、`.downloadFallback`。布尔参数支持 `true` / `false` / `1` / `0`。也支持单独使用任意文本字段：`aliyunKey`、`autodlKey`、`asrBase`、`autodlBase`、`aiBase`、`aiKey`、`aiModel`、`hotwords`。同时提供 `config` 和单独参数时，单独参数优先。无效配置整次不导入；浏览器禁止本地存储时会提示保存失败并保留原链接供重试。无关查询参数与页面锚点会保留。
 
 ## 技术范围
 

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Check, FileInput, Sparkles } from "lucide-react";
+import { X, Check, Copy, FileInput, Sparkles } from "lucide-react";
 import { useStudio } from "./store";
 import { activeSegments, parseSrt, type Channel, type Connection, type Segment, uid } from "./model";
 import { api } from "./providers";
 import { report } from "./actions";
+import { settingsShareUrl } from "./settings";
 export function Modal({
   title,
   close,
@@ -76,11 +77,26 @@ export function Modal({
 }
 export function SettingsDialog({ close }: { close: () => void }) {
   const st = useStudio(),
-    [s, update] = useState(st.settings),
+    s = st.settings,
+    [shareLink, setShareLink] = useState(""),
     [status, statusSet] = useState(""),
     [checking, checkState] = useState(false);
+  const update = (change: (current: typeof s) => typeof s) => {
+    st.saveSettings(change(useStudio.getState().settings));
+    setShareLink("");
+  };
   const field = (key: keyof typeof s, value: unknown) =>
     update((current) => ({ ...current, [key]: value }));
+  const share = async () => {
+    const link = settingsShareUrl(window.location.href, useStudio.getState().settings);
+    try {
+      await navigator.clipboard.writeText(link);
+      statusSet("配置分享链接已复制");
+    } catch {
+      setShareLink(link);
+      statusSet("请复制下方配置分享链接");
+    }
+  };
   const connectionFields = (channel: Channel, name: string) => {
     const connection = s.connections[channel];
     const change = (key: keyof Connection, value: unknown) =>
@@ -155,12 +171,9 @@ export function SettingsDialog({ close }: { close: () => void }) {
   return (
     <Modal title="API 与工作区设置" close={close} wide>
       <div className="settings-basics">
-        <p className="help">各渠道独立选择连接方式与代理地址。视频处理在本地浏览器完成，Key 默认仅保存于本次会话。</p>
-        <label className="check">
-          <input type="checkbox" checked={s.remember}
-            onChange={(e) => field("remember", e.target.checked)} />
-          在此设备记住 API Key
-        </label>
+        <p className="help">修改后自动保存，API Key 保存在当前浏览器。各渠道独立选择连接方式与代理地址。</p>
+        <p className="help">分享链接包含当前 Key 和全部设置。朋友打开后自动导入，地址随即恢复干净，方便收藏。</p>
+        {st.settingsError && <p role="alert">{st.settingsError}</p>}
       </div>
       <div className="settings-grid">
         <section>
@@ -280,19 +293,15 @@ export function SettingsDialog({ close }: { close: () => void }) {
           {status}
         </p>
       )}
+      {shareLink && (
+        <label className="settings-basics">
+          配置分享链接
+          <textarea readOnly value={shareLink} onFocus={(e) => e.target.select()} />
+        </label>
+      )}
       <footer>
-        <button onClick={close}>取消</button>
-        <button
-          className="primary"
-          onClick={() => {
-            st.saveSettings(s);
-            close();
-            st.set({ notice: "API 设置已保存" });
-          }}
-        >
-          <Check size={15} />
-          保存设置
-        </button>
+        <button onClick={share}><Copy size={15} />复制配置分享链接</button>
+        <button className="primary" onClick={close}>完成</button>
       </footer>
     </Modal>
   );

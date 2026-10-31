@@ -22,8 +22,10 @@ import {
   duration,
   dubPlacement,
   placement,
+  resizeSegment,
   removeVideo,
   splitVideo,
+  subtitlePlacement,
   takeFor,
   timecode,
 } from "./model";
@@ -67,20 +69,20 @@ export default function EditorTimeline() {
             start: dub?.start ?? Math.max(0, at.start + s.dubOffset),
             end: dub?.end ?? at.end + s.dubOffset,
             effectId: "dub",
-            flexible: false,
+            maxEnd: duration(p),
           };
         }),
       },
       {
         id: "subtitle",
         actions: activeSegments(p).map((s) => {
-          const at = placement(p, s)!;
+          const at = subtitlePlacement(p, s)!;
           return {
             id: "s:" + s.id,
-            start: Math.max(0, at.start + s.subtitleOffset),
-            end: at.end + s.subtitleOffset,
+            start: at.start,
+            end: at.end,
             effectId: "subtitle",
-            flexible: false,
+            maxEnd: duration(p),
           };
         }),
       },
@@ -99,11 +101,9 @@ export default function EditorTimeline() {
   useEffect(() => {
     ref.current?.setTime(time);
   }, [time]);
-  const select = (id: string, t: number) =>
+  const select = (id: string) =>
     set({
       selected: id.replace(/^[dso]:/, ""),
-      time: Math.max(0, t),
-      playing: false,
     });
   const modify = (
     id: string,
@@ -134,8 +134,15 @@ export default function EditorTimeline() {
       const s = p.segments.find((s) => s.id === id.slice(2));
       if (!s) return;
       const at = placement(p, s)!;
-      if (id.startsWith("d:")) s.dubOffset = start - at.start;
-      else s.subtitleOffset = start - at.start;
+      const track = id.startsWith("d:") ? "dub" : "subtitle";
+      if (kind === "trim") resizeSegment(p, s, track, start, end);
+      else {
+        const current = track === "dub"
+          ? dubPlacement(p, s) ?? { start: Math.max(0, at.start + s.dubOffset) }
+          : subtitlePlacement(p, s)!;
+        if (track === "dub") s.dubOffset += start - current.start;
+        else s.subtitleOffset += start - current.start;
+      }
     });
   };
   const split = () => {
@@ -319,14 +326,23 @@ export default function EditorTimeline() {
                 playing: false,
               })
             }
-            onClickActionOnly={(_, v) => select(v.action.id, v.time)}
+            onClickActionOnly={(e, v) => {
+              e.stopPropagation();
+              select(v.action.id);
+            }}
+            onActionMoveStart={({ action }) => select(action.id)}
+            onActionResizeStart={({ action }) => select(action.id)}
             onActionMoveEnd={(v) => modify(v.action.id, v.start, v.end, "move")}
             onActionMoving={({ start }) => start >= 0}
             onActionResizing={({ action, start, end }) => {
               const c =
                 p.videos.find((v) => v.id === action.id) ||
                 p.music.find((v) => v.id === action.id);
-              if (!c) return false;
+              if (!c)
+                return (
+                  /^(d|s):/.test(action.id) &&
+                  start >= 0 && end <= duration(p) && end - start >= 0.04
+                );
               const asset = p.assets.find((a) => a.id === c.assetId)!;
               return (
                 start >= 0 &&

@@ -1143,6 +1143,11 @@ textarea {
 .timeline-editor-action .timeline-editor-action-right-stretch {
   background: #98afd5 !important;
   opacity: 0.4;
+  cursor: ew-resize;
+}
+.timeline-editor-action:hover .timeline-editor-action-left-stretch,
+.timeline-editor-action:hover .timeline-editor-action-right-stretch {
+  opacity: 0.8;
 }
 .timeline-editor-cursor {
   border-color: #e27567 !important;

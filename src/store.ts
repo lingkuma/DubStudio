@@ -1,14 +1,15 @@
 import { create } from "zustand";
 import {
   blankProject,
-  restoreSettings,
   duration,
   type Project,
   type Settings,
 } from "./model";
+import { initializeSettings, persistSettings } from "./settings";
 type State = {
   project: Project;
   settings: Settings;
+  settingsError: string;
   selected: string | null;
   time: number;
   playing: boolean;
@@ -25,23 +26,17 @@ type State = {
   load: (p: Project) => void;
   saveSettings: (s: Settings) => void;
 };
-let saved = {};
-try {
-  saved = JSON.parse(
-    sessionStorage.getItem("dubstudio-settings") ||
-      localStorage.getItem("dubstudio-settings") ||
-      "{}",
-  );
-} catch {}
+const initialSettings = initializeSettings();
 export const useStudio = create<State>((set, get) => ({
   project: blankProject(),
-  settings: restoreSettings(saved),
+  settings: initialSettings.settings,
+  settingsError: initialSettings.settingsError,
   selected: null,
   time: 0,
   playing: false,
   past: [],
   future: [],
-  notice: "",
+  notice: initialSettings.notice,
   busy: "",
   progress: 0,
   dirty: 0,
@@ -95,10 +90,6 @@ export const useStudio = create<State>((set, get) => ({
     });
   },
   saveSettings(s) {
-    sessionStorage.setItem("dubstudio-settings", JSON.stringify(s));
-    if (s.remember)
-      localStorage.setItem("dubstudio-settings", JSON.stringify(s));
-    else localStorage.removeItem("dubstudio-settings");
-    set({ settings: s });
+    set({ settings: s, settingsError: persistSettings(s) });
   },
 }));

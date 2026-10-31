@@ -46,6 +46,8 @@ export type Segment = {
   jobReferenceKey?: string;
   dubOffset: number;
   subtitleOffset: number;
+  dubDuration?: number;
+  subtitleDuration?: number;
   gain: number;
   fit: "fit" | "natural";
   muted: boolean;
@@ -126,7 +128,6 @@ export type Settings = {
   asrBase: string;
   autodlBase: string;
   connections: Record<Channel, Connection>;
-  remember: boolean;
   diarization: boolean;
   hotwords: string;
   aiBase: string;
@@ -143,7 +144,6 @@ export const defaults: Settings = {
     tts: { transport: "direct", gateway: "/api/gateway", workerUrl: "", downloadFallback: true },
     ai: { transport: "gateway", gateway: "/api/gateway", workerUrl: "", downloadFallback: true },
   },
-  remember: false,
   diarization: false,
   hotwords: "",
   aiBase: "https://api.0-0.pro/v1",
@@ -152,9 +152,9 @@ export const defaults: Settings = {
 };
 export function restoreSettings(saved: unknown): Settings {
   const old = saved && typeof saved === "object"
-    ? saved as Partial<Settings> & { transport?: "direct" | "gateway"; gateway?: string }
+    ? saved as Partial<Settings> & { transport?: "direct" | "gateway"; gateway?: string; remember?: boolean }
     : {};
-  const { transport, gateway, connections, ...rest } = old;
+  const { transport, gateway, connections, remember: _remember, ...rest } = old;
   const migrated = { ...defaults, ...rest, connections: {} as Settings["connections"] };
   for (const channel of ["asr", "tts", "ai"] as const) {
     migrated.connections[channel] = {
@@ -236,11 +236,15 @@ export function dubPlacement(p: Project, s: Segment) {
   const at = placement(p, s),
     take = takeFor(s),
     clip = p.videos.find((v) => v.id === s.clipId);
-  if (!at || !take || !clip) return null;
+  if (!at || !clip) return null;
+  if (s.dubDuration !== undefined) {
+    const range = customPlacement(p, s, s.dubOffset, s.dubDuration)!;
+    return { ...range, length: Math.max(0, range.end - range.start) };
+  }
   const begin = at.start + s.dubOffset,
     clipEnd = clip.start + clip.out - clip.in;
   const end =
-    s.fit === "fit" || clip.out < s.sourceEnd
+    !take || s.fit === "fit" || clip.out < s.sourceEnd
       ? at.end + s.dubOffset
       : Math.min(clipEnd, begin + take.duration - at.cut);
   return {
@@ -249,6 +253,43 @@ export function dubPlacement(p: Project, s: Segment) {
     offset: at.cut + Math.max(0, -begin),
     length: Math.max(0, end - Math.max(0, begin)),
   };
+}
+// Explicit lengths are anchored to the full sentence, so video cuts keep the
+// same audio position instead of restarting a stretched take on each side.
+function customPlacement(p: Project, s: Segment, offset: number, length: number) {
+  const c = p.videos.find((v) => v.id === s.clipId);
+  if (!c || !placement(p, s)) return null;
+  const begin = c.start + s.sourceStart - c.in + offset,
+    start = Math.max(0, begin, c.in > s.sourceStart ? c.start : 0),
+    end = Math.max(start, Math.min(
+      begin + length,
+      c.out < s.sourceEnd ? c.start + c.out - c.in : Infinity,
+    ));
+  return { start, end, offset: start - begin };
+}
+export function subtitlePlacement(p: Project, s: Segment) {
+  const at = placement(p, s);
+  if (!at) return null;
+  if (s.subtitleDuration !== undefined)
+    return customPlacement(p, s, s.subtitleOffset, s.subtitleDuration);
+  return {
+    start: Math.max(0, at.start + s.subtitleOffset),
+    end: Math.max(0, at.end + s.subtitleOffset),
+  };
+}
+export function resizeSegment(
+  p: Project, s: Segment, track: "dub" | "subtitle", start: number, end: number,
+) {
+  const c = p.videos.find((v) => v.id === s.clipId);
+  if (!c || ![start, end].every(Number.isFinite) || start < 0 || end - start < 0.04) return;
+  const offset = start - (c.start + s.sourceStart - c.in);
+  if (track === "dub") {
+    s.dubOffset = offset;
+    s.dubDuration = end - start;
+  } else {
+    s.subtitleOffset = offset;
+    s.subtitleDuration = end - start;
+  }
 }
 export function placement(p: Project, s: Segment) {
   const c = p.videos.find((v) => v.id === s.clipId);
@@ -360,14 +401,14 @@ export function srt(p: Project) {
   };
   return activeSegments(p)
     .map((s, i) => {
-      const at = placement(p, s)!;
+      const at = subtitlePlacement(p, s)!;
       return (
         i +
         1 +
         "\n" +
-        stamp(at.start + s.subtitleOffset) +
+        stamp(at.start) +
         " --> " +
-        stamp(at.end + s.subtitleOffset) +
+        stamp(at.end) +
         "\n" +
         s.subtitle +
         "\n"

@@ -9,7 +9,7 @@ import {
   activeSegments,
   dubPlacement,
   duration,
-  placement,
+  subtitlePlacement,
   takeFor,
   uid,
   type Asset,
@@ -255,12 +255,11 @@ export async function mixAudio(p: Project): Promise<AudioBuffer> {
     s.start(start, offset, len);
   };
   for (const s of activeSegments(p)) {
-    const t = takeFor(s),
-      at = placement(p, s)!;
+    const t = takeFor(s);
     if (!t || s.muted) continue;
     const b =
-      s.fit === "fit"
-        ? await fitAudio(t.assetId, s.sourceEnd - s.sourceStart)
+      s.dubDuration !== undefined || s.fit === "fit"
+        ? await fitAudio(t.assetId, s.dubDuration ?? s.sourceEnd - s.sourceStart)
         : await decode(t.assetId);
     const pos = dubPlacement(p, s)!;
     const start = pos.start,
@@ -348,10 +347,8 @@ export function paintSubtitles(
 ) {
   if (!p.subtitles) return;
   const current = activeSegments(p).filter((s) => {
-    const at = placement(p, s)!;
-    return (
-      time >= at.start + s.subtitleOffset && time < at.end + s.subtitleOffset
-    );
+    const at = subtitlePlacement(p, s)!;
+    return time >= at.start && time < at.end;
   });
   if (!current.length) return;
   const size = (p.subtitleSize * height) / p.height;

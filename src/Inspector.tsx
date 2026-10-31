@@ -308,12 +308,21 @@ export default function Inspector({ tab }: { tab: "properties" | "voice" }) {
             配音时长
             <select
               value={s.fit}
-              onChange={(e) => patch({ fit: e.target.value as Segment["fit"] })}
+              onChange={(e) => patch({
+                fit: e.target.value as Segment["fit"],
+                dubDuration: undefined,
+              })}
             >
               <option value="fit">匹配原句 · 保持音高</option>
               <option value="natural">自然时长 · 允许延伸</option>
             </select>
           </label>
+          {s.dubDuration !== undefined && (
+            <p className="help">
+              时间轴自定时长：{s.dubDuration.toFixed(2)}s · 保持音高。
+              重新选择上方模式可恢复自动时长。
+            </p>
+          )}
           {take && (
             <p className="help">
               生成 {take.duration.toFixed(2)}s / 原句{" "}
