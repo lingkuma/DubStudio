@@ -27,7 +27,9 @@ function fixture() {
     lineWidth: 0,
     measureText: () => ({ width: 100 }),
     fillText: vi.fn(),
-    fillRect() {
+    beginPath: vi.fn(),
+    rect: vi.fn(),
+    fill() {
       fills.push(this.fillStyle);
     },
     strokeText() {
@@ -93,5 +95,63 @@ describe("shared preview and export subtitle renderer", () => {
     p.subtitles = false;
     draw();
     expect(ctx.fillText).toHaveBeenCalledOnce();
+  });
+  it("defaults missing line spacing to zero and joins all backgrounds in one fill", () => {
+    const { p, ctx, fills, draw } = fixture();
+    delete p.subtitleLineGap;
+    p.segments[0].subtitle = "第一行\n第二行\n第三行";
+    draw();
+    const boxes = ctx.rect.mock.calls;
+    expect(boxes).toHaveLength(3);
+    for (let i = 1; i < boxes.length; i++) {
+      expect(boxes[i][1]).toBeCloseTo(boxes[i - 1][1] + boxes[i - 1][3]);
+    }
+    expect(ctx.beginPath).toHaveBeenCalledOnce();
+    expect(fills).toEqual(["rgba(0,0,0,0.72)"]);
+  });
+  it("anchors the top and first line across one, two and three lines", () => {
+    const { p, ctx, draw } = fixture();
+    p.subtitleY = 0.5;
+    for (const text of [
+      "一行",
+      "第一行\n第二行",
+      "第一行\n第二行\n第三行",
+    ]) {
+      ctx.rect.mockClear();
+      ctx.fillText.mockClear();
+      p.segments[0].subtitle = text;
+      draw();
+      expect(ctx.rect.mock.calls[0][1]).toBe(p.height * p.subtitleY);
+      expect(ctx.fillText.mock.calls[0][2]).toBeCloseTo(
+        p.height * p.subtitleY + p.subtitleSize * 0.65,
+      );
+    }
+  });
+  it("scales custom line gaps with the canvas, including when the background is off", () => {
+    const { p, ctx, draw } = fixture();
+    p.subtitleSize = 60;
+    p.subtitleLineGap = 12;
+    p.subtitleY = 0.5;
+    p.segments[0].subtitle = "第一行\n第二行";
+    draw(p.height / 2);
+    const boxes = ctx.rect.mock.calls;
+    expect(boxes[1][1] - boxes[0][1] - boxes[0][3]).toBeCloseTo(6);
+    const positions = ctx.fillText.mock.calls.map((call) => call[2]);
+    ctx.fillText.mockClear();
+    p.subtitleBackground = false;
+    draw(p.height / 2);
+    expect(ctx.fillText.mock.calls.map((call) => call[2])).toEqual(positions);
+    expect(positions[1] - positions[0]).toBeCloseTo(45);
+  });
+  it("keeps automatically wrapped captions anchored at the configured top", () => {
+    const { p, ctx, draw } = fixture();
+    ctx.measureText = (text = "") => ({ width: text.length * 100 });
+    p.segments[0].subtitle = "自动换行的字幕会继续向下排列";
+    draw();
+    expect(ctx.rect.mock.calls.length).toBeGreaterThan(1);
+    expect(ctx.rect.mock.calls[0][1]).toBe(p.height * p.subtitleY);
+    expect(ctx.fillText.mock.calls[1][2]).toBeGreaterThan(
+      ctx.fillText.mock.calls[0][2],
+    );
   });
 });

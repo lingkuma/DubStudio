@@ -109,6 +109,7 @@ export type Project = {
   musicVolume: number;
   subtitles: boolean;
   subtitleSize: number;
+  subtitleLineGap?: number;
   subtitleColor: string;
   subtitleBackground: boolean;
   subtitleBackgroundColor?: string;
@@ -192,6 +193,7 @@ export const blankProject = (): Project => ({
   musicVolume: 0.25,
   subtitles: true,
   subtitleSize: 32,
+  subtitleLineGap: 0,
   subtitleColor: "#ffffff",
   subtitleBackground: true,
   subtitleY: 0.9,

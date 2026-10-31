@@ -2,6 +2,9 @@ import type { Project } from "./model";
 
 export function subtitleStyle(p: Project) {
   return {
+    lineGap: Number.isFinite(p.subtitleLineGap)
+      ? Math.max(0, Math.min(300, p.subtitleLineGap!))
+      : 0,
     background: p.subtitleBackgroundColor ?? "#000000",
     opacity: p.subtitleBackgroundOpacity ?? 0.72,
     font: p.subtitleFont ?? "system-ui, sans-serif",

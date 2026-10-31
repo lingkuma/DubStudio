@@ -92,6 +92,19 @@ export default function SubtitleInspector() {
         />
       </label>
       <label>
+        行间距（画布像素）
+        <NumberField
+          aria-label="字幕行间距"
+          min={0}
+          max={300}
+          value={style.lineGap}
+          onValueChange={(subtitleLineGap) => patch({ subtitleLineGap })}
+        />
+      </label>
+      <p className="help">
+        0 表示多行背景相连；遮盖原字幕时，将背景不透明度设为 100%。
+      </p>
+      <label>
         字体
         <select
           value={style.font}
@@ -198,10 +211,11 @@ export default function SubtitleInspector() {
       </label>
       <label className="slider-label">
         <span>
-          字幕垂直位置<b>{Math.round(p.subtitleY * 100)}%</b>
+          字幕顶部位置<b>{Math.round(p.subtitleY * 100)}%</b>
         </span>
         <input
           type="range"
+          aria-label="字幕顶部位置"
           min=".15"
           max=".95"
           step=".01"
@@ -209,6 +223,7 @@ export default function SubtitleInspector() {
           onChange={(e) => patch({ subtitleY: +e.target.value })}
         />
       </label>
+      <p className="help">位置以画面顶部为起点，增加行数时向下延伸。</p>
     </div>
   );
 }

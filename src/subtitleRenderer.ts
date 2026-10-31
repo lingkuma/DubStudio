@@ -46,21 +46,27 @@ export function paintSubtitles(
   const lines = current.flatMap((s) =>
       subtitleLines(ctx, s.subtitle, width * 0.84),
     ),
-    lineHeight = size * 1.45,
-    bottom = height * p.subtitleY,
-    start = bottom - (lines.length - 1) * lineHeight;
-  lines.forEach((line, i) => {
-    const y = start + i * lineHeight,
-      w = ctx.measureText(line).width;
-    if (p.subtitleBackground) {
-      ctx.fillStyle = backgroundRgba(style.background, style.opacity);
-      ctx.fillRect(
+    boxHeight = size * 1.3,
+    lineHeight = boxHeight + (style.lineGap * height) / p.height,
+    top = height * p.subtitleY;
+  if (p.subtitleBackground) {
+    ctx.fillStyle = backgroundRgba(style.background, style.opacity);
+    // Fill the connected line boxes as one path so fractional preview pixels
+    // cannot leave seams or double the opacity at their shared edges.
+    ctx.beginPath();
+    lines.forEach((line, i) => {
+      const w = ctx.measureText(line).width;
+      ctx.rect(
         (width - w) / 2 - size * 0.4,
-        y - size * 0.65,
+        top + i * lineHeight,
         w + size * 0.8,
-        size * 1.3,
+        boxHeight,
       );
-    }
+    });
+    ctx.fill();
+  }
+  lines.forEach((line, i) => {
+    const y = top + boxHeight / 2 + i * lineHeight;
     if (style.outlineWidth > 0) {
       ctx.strokeStyle = style.outlineColor;
       ctx.lineJoin = "round";
