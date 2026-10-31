@@ -379,6 +379,75 @@ textarea {
   flex: 1;
   padding: 0 9px 15px;
 }
+.speaker-panel {
+  margin: 0 16px 10px;
+  flex-shrink: 0;
+  font-size: 11px;
+  border-bottom: 1px solid var(--line);
+}
+.speaker-panel summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 0 9px;
+  cursor: pointer;
+  color: inherit;
+}
+.speaker-panel summary:focus-visible {
+  outline: 2px solid #3067d9;
+  outline-offset: 2px;
+}
+.speaker-summary {
+  flex-basis: 100%;
+  color: #647188;
+  overflow-wrap: anywhere;
+}
+.speaker-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #647188;
+}
+.speaker-editor {
+  max-height: 210px;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+.speaker-editor .help {
+  margin: 0 0 8px;
+}
+.speaker-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.speaker-name-row input {
+  min-width: 0;
+  width: 100%;
+  font-size: 12px;
+}
+.speaker-name-row span {
+  flex-shrink: 0;
+  color: #647188;
+}
+.segment .speaker-select {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 11px;
+  color: #647188;
+}
+.segment .speaker-select select {
+  min-width: 0;
+  width: 100%;
+  padding: 4px 6px;
+  font-size: 12px;
+}
 .segment {
   border: 1px solid transparent;
   padding: 11px 11px 8px;

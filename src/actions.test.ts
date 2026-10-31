@@ -83,6 +83,18 @@ beforeEach(() => {
 });
 
 describe("sentence reference selection", () => {
+  it("keeps recognized speaker metadata through the full recognition action", async () => {
+    vi.mocked(transcribe).mockResolvedValue({ transcripts: [{ sentences: [
+      { begin_time: 7000, end_time: 8000, text: "甲", speaker_id: 0 },
+      { begin_time: 8000, end_time: 9000, text: "乙", speaker_id: 1 },
+      { begin_time: 9000, end_time: 10000, text: "丙", speaker_id: 2 },
+    ] }] });
+    await recognize();
+    const p = useStudio.getState().project;
+    expect(p.speakers?.map((s) => s.name)).toEqual(["人物 1", "人物 2", "人物 3"]);
+    expect(new Set(p.segments.map((s) => s.speakerId)).size).toBe(3);
+  });
+
   it("uploading a custom voice keeps every sentence's existing source", async () => {
     useStudio.getState().edit((p) => {
       p.segments[1].voiceId = custom.id;

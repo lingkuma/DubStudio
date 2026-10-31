@@ -100,7 +100,7 @@ export function settingsShareUrl(href: string, settings: Settings) {
 
 export function persistSettings(settings: Settings): string {
   try {
-    localStorage.setItem(storageKey, JSON.stringify(settings));
+    localStorage.setItem(storageKey, JSON.stringify({ ...settings, speakerDefaultsVersion: 1 }));
   } catch {
     return "浏览器未能保存设置，请允许本站使用本地存储后重试；当前修改仅在本次打开期间有效。";
   }
@@ -116,7 +116,10 @@ export function initializeSettings() {
     try {
       const saved = read();
       if (saved) {
-        settings = mergeSettings(defaults, restoreSettings(JSON.parse(saved)));
+        const parsed = JSON.parse(saved);
+        settings = mergeSettings(defaults, restoreSettings(parsed));
+        // Turn on the new default once for existing installs, then respect opt-outs.
+        if (parsed.speakerDefaultsVersion !== 1) settings.diarization = true;
         break;
       }
     } catch {}

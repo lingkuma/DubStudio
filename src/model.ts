@@ -36,6 +36,7 @@ export type Segment = {
   subtitle: string;
   syncText: boolean;
   voiceId: string;
+  speakerId?: string;
   takeId?: string;
   takes: Take[];
   status: "idle" | "queued" | "generating" | "ready" | "error";
@@ -61,6 +62,7 @@ export type Voice = {
   emotions: Record<string, number>;
   random: boolean;
 };
+export type Speaker = { id: string; name: string };
 export type MusicClip = {
   id: string;
   assetId: string;
@@ -90,6 +92,7 @@ export type Project = {
     before: Record<string, string>;
     projectId: string;
     beforeTimeline: string;
+    beforeSpeakers?: string;
   };
   version: 1;
   id: string;
@@ -97,6 +100,7 @@ export type Project = {
   assets: Asset[];
   videos: VideoClip[];
   segments: Segment[];
+  speakers?: Speaker[];
   voices: Voice[];
   music: MusicClip[];
   messages: Message[];
@@ -151,7 +155,7 @@ export const defaults: Settings = {
     tts: { transport: "direct", gateway: "/api/gateway", workerUrl: "", downloadFallback: true },
     ai: { transport: "gateway", gateway: "/api/gateway", workerUrl: "", downloadFallback: true },
   },
-  diarization: false,
+  diarization: true,
   hotwords: "",
   aiBase: "https://api.0-0.pro/v1",
   aiKey: "",
@@ -181,6 +185,7 @@ export const blankProject = (): Project => ({
   assets: [],
   videos: [],
   segments: [],
+  speakers: [],
   voices: [],
   music: [],
   messages: [],
@@ -318,6 +323,39 @@ export function activeSegments(p: Project) {
     .filter((s) => placement(p, s))
     .sort((a, b) => placement(p, a)!.start - placement(p, b)!.start);
 }
+// ASR speaker numbers are local to one source/channel, never global identities.
+export function speakerRoster(p: Project): Speaker[] {
+  const speakers = (p.speakers || []).map((s) => ({ ...s }));
+  for (const s of p.segments) {
+    if (s.speakerId && !speakers.some((v) => v.id === s.speakerId))
+      speakers.push({ id: s.speakerId, name: `人物 ${speakers.length + 1}` });
+  }
+  return speakers;
+}
+export function speakerName(p: Project, s: Segment) {
+  return speakerRoster(p).find((v) => v.id === s.speakerId)?.name || "未分配人物";
+}
+export function speakerContext(p: Project) {
+  const rows = activeSegments(p);
+  const speakers = speakerRoster(p).map((v) => ({
+    ...v,
+    lineCount: rows.filter((s) => s.speakerId === v.id).length,
+  }));
+  const active = speakers.filter((v) => v.lineCount > 0);
+  const unassignedLineCount = rows.filter((s) => !s.speakerId).length;
+  return {
+    speakerCount: active.length,
+    speakerCountComplete: rows.length > 0 && unassignedLineCount === 0,
+    unassignedLineCount,
+    speakers: active,
+  };
+}
+export function speakerSnapshot(p: Project) {
+  return JSON.stringify([
+    speakerContext(p),
+    activeSegments(p).map((s) => [s.id, s.speakerId || null]),
+  ]);
+}
 export function splitVideo(p: Project, id: string, time: number) {
   const c = p.videos.find((x) => x.id === id);
   if (!c) return;
@@ -355,7 +393,9 @@ export function parseTranscript(
 ): Segment[] {
   const d = data as any;
   const ts = d.transcripts || d.output?.transcripts || [];
-  const list = ts.flatMap((t: any) => t.sentences || []);
+  const list = ts.flatMap((t: any) =>
+    (t.sentences || []).map((s: any) => ({ ...s, channel_id: t.channel_id ?? 0 })),
+  );
   return list
     .filter(
       (s: any) =>
@@ -373,6 +413,9 @@ export function parseTranscript(
       subtitle: String(s.text || ""),
       syncText: true,
       voiceId,
+      ...(Number.isInteger(s.speaker_id) && s.speaker_id >= 0
+        ? { speakerId: JSON.stringify([clip.assetId, s.channel_id, s.speaker_id]) }
+        : {}),
       takes: [],
       status: "idle",
       dubOffset: 0,

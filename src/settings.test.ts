@@ -72,6 +72,21 @@ describe("settings links", () => {
 describe("settings persistence and startup", () => {
   const key = "dubstudio-settings";
 
+  it("enables diarization for new and existing installs once, then preserves a user's opt-out", () => {
+    const { local } = browser("https://studio.example/");
+    expect(initializeSettings().settings.diarization).toBe(true);
+    local.setItem(key, JSON.stringify({ aiKey: "keep", diarization: false }));
+    const migrated = initializeSettings().settings;
+    expect(migrated).toMatchObject({ aiKey: "keep", diarization: true });
+    persistSettings({ ...migrated, diarization: false });
+    expect(initializeSettings().settings.diarization).toBe(false);
+  });
+
+  it("respects an explicit URL opt-out during the default migration", () => {
+    browser("https://studio.example/?diarization=false");
+    expect(initializeSettings().settings.diarization).toBe(false);
+  });
+
   it("migrates session-only keys into persistent storage and drops the old remember flag", () => {
     const { local, session } = browser("https://studio.example/");
     session.setItem(key, JSON.stringify({ aliyunKey: "session-key", remember: false }));

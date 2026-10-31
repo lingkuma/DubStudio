@@ -36,6 +36,7 @@ import {
   splitVideo,
   needsGeneration,
   canResumeGeneration,
+  speakerRoster,
 } from "./model";
 import {
   addVideo,
@@ -62,6 +63,7 @@ import SubtitleInspector from "./SubtitleInspector";
 import NumberField from "./NumberField";
 import PanelSeparator, { usePanelSize } from "./PanelSeparator";
 import VoiceSourceSelect from "./VoiceSourceSelect";
+import Speakers, { SpeakerSelect } from "./Speakers";
 import AIPanel from "./AIPanel";
 import { ImportDialog, Modal, SettingsDialog } from "./Dialogs";
 export default function App() {
@@ -83,6 +85,7 @@ export default function App() {
   const input = useRef<HTMLInputElement>(null),
     open = useRef<HTMLInputElement>(null),
     rows = activeSegments(p),
+    speakers = speakerRoster(p),
     visible = rows.filter((s) =>
       (s.text + s.original + s.subtitle).includes(search),
     );
@@ -355,6 +358,7 @@ export default function App() {
               <Download size={15} />
             </button>
           </div>
+          <Speakers />
           <div className="search-field">
             <Search size={14} />
             <input
@@ -449,6 +453,15 @@ export default function App() {
                         if (row.syncText) row.subtitle = e.target.value;
                       })
                     }
+                  />
+                  <SpeakerSelect
+                    project={p}
+                    segment={s}
+                    roster={speakers}
+                    disabled={locked}
+                    onChange={(speakerId) => edit((p) => {
+                      p.segments.find((row) => row.id === s.id)!.speakerId = speakerId;
+                    })}
                   />
                   <VoiceSourceSelect
                     project={p}

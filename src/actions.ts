@@ -8,6 +8,7 @@ import {
   takeFor,
   needsGeneration,
   referenceKey,
+  speakerRoster,
   uid,
   type Segment,
   type Voice,
@@ -156,6 +157,7 @@ export async function recognize() {
     if (!result.length) throw new Error("没有识别到语音，请检查视频音轨");
     useStudio.getState().edit((p) => {
       p.segments = result;
+      p.speakers = speakerRoster(p);
     });
     useStudio.getState().set({
       notice: "识别完成，共 " + result.length + " 个句子",

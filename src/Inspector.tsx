@@ -17,6 +17,7 @@ import {
   type Voice,
 } from "./model";
 import VoiceSourceSelect from "./VoiceSourceSelect";
+import { SpeakerSelect } from "./Speakers";
 import {
   addMusic,
   addVoice,
@@ -298,6 +299,12 @@ export default function Inspector({ tab }: { tab: "properties" | "voice" }) {
               }}
             />
           </label>
+          <SpeakerSelect
+            project={p}
+            segment={s}
+            disabled={!!busy}
+            onChange={(speakerId) => patch({ speakerId })}
+          />
           <VoiceSourceSelect
             project={p}
             segment={s}

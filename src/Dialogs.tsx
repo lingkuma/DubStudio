@@ -213,8 +213,9 @@ export function SettingsDialog({ close }: { close: () => void }) {
               checked={s.diarization}
               onChange={(e) => field("diarization", e.target.checked)}
             />
-            识别说话人
+            识别说话人（默认开启）
           </label>
+          <p className="help">自动区分多人台词，识别后可在人物面板改名或修正归属。</p>
           <button
             disabled={checking || !s.aliyunKey}
             onClick={() => check("asr-policy")}

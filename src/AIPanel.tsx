@@ -15,6 +15,9 @@ import {
   removeVideo,
   splitVideo,
   uid,
+  speakerContext,
+  speakerName,
+  speakerSnapshot,
   type Project,
 } from "./model";
 import { askAI, type AIResult } from "./ai";
@@ -30,6 +33,7 @@ export default function AIPanel({
     [input, setInput] = useState(""),
     [sending, sendState] = useState(false);
   const draft = p.proposal;
+  const people = speakerContext(p);
   const setDraft = (value: Project["proposal"] | null) =>
     edit((p) => {
       p.proposal = value || undefined;
@@ -89,6 +93,7 @@ export default function AIPanel({
           ),
           projectId: snapshot.id,
           beforeTimeline: JSON.stringify(snapshot.videos),
+          beforeSpeakers: speakerSnapshot(snapshot),
         });
     } finally {
       sendState(false);
@@ -100,6 +105,8 @@ export default function AIPanel({
     if (
       current.id !== draft.projectId ||
       JSON.stringify(current.videos) !== draft.beforeTimeline ||
+      (draft.beforeSpeakers !== undefined &&
+        speakerSnapshot(current) !== draft.beforeSpeakers) ||
       draft.result.edits.some((e) => {
         const s = current.segments.find((s) => s.id === e.id);
         return (
@@ -107,7 +114,7 @@ export default function AIPanel({
         );
       })
     ) {
-      report("这份建议对应的原文已变化，请重新生成建议");
+      report("这份建议对应的原文、人物或时间轴已变化，请重新生成建议");
       return;
     }
     const { result } = draft;
@@ -152,7 +159,11 @@ export default function AIPanel({
     <section className="ai-panel">
       <div className="ai-context">
         <Sparkles size={15} />
-        <span>已读取 {activeSegments(p).length} 句台词与时间轴</span>
+        <span>
+          已读取 {activeSegments(p).length} 句台词 · {people.speakerCount} 位人物
+          {people.unassignedLineCount > 0 &&
+            ` · ${people.unassignedLineCount} 句未分配`}
+        </span>
       </div>
       <div className="chat-messages">
         {!p.messages.length && (
@@ -218,7 +229,7 @@ export default function AIPanel({
                 <div className="diff-row" key={e.id}>
                   <small>
                     第 {activeSegments(p).findIndex((s) => s.id === e.id) + 1}{" "}
-                    句 · {[...old].length} → {[...next].length} 字
+                    句 · {s ? speakerName(p, s) : "未分配人物"} · {[...old].length} → {[...next].length} 字
                   </small>
                   <del>{old}</del>
                   <ins>{next}</ins>
