@@ -1,4 +1,11 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Timeline, type TimelineState } from "@xzdarcy/react-timeline-editor";
 import type { TimelineRow } from "@xzdarcy/timeline-engine";
 import "@xzdarcy/react-timeline-editor/dist/react-timeline-editor.css";
@@ -30,6 +37,12 @@ import {
   timecode,
 } from "./model";
 import { report } from "./actions";
+import {
+  dragRange,
+  snapRange,
+  wheelZoom,
+  type DragKind,
+} from "./timelineInteraction";
 const effects = {
   video: { id: "video", name: "video" },
   original: { id: "original", name: "original" },
@@ -52,38 +65,70 @@ function EditorTimeline() {
   const scrollLeftRef = useRef(0);
   const pendingZoom = useRef<{ time: number; x: number } | null>(null);
   const dragged = useRef(false);
+  const interaction = useRef<{ cancel: () => void } | null>(null);
+  const zoomFrame = useRef(0);
   const total = useMemo(() => duration(p), [p]);
   // Keep labels readable at every zoom while preserving the pixels/second ratio.
   const scale = zoom < 40 ? 15 : zoom < 80 ? 5 : zoom < 160 ? 2 : 1;
   const scaleWidth = (zoom / 5) * scale;
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
+  const changeZoom = (value: number) => {
+    cancelAnimationFrame(zoomFrame.current);
+    zoomFrame.current = 0;
+    pendingZoom.current = null;
+    if (!interaction.current) setZoom(value);
+  };
   useEffect(() => {
     const section = sectionRef.current;
     if (!section) return;
+    let target = zoomRef.current,
+      previous = 0;
+    const animate = (now: number) => {
+      const dt = previous ? Math.min(32, now - previous) : 16;
+      previous = now;
+      const next =
+        zoomRef.current + (target - zoomRef.current) * (1 - Math.exp(-dt / 40));
+      const finished = Math.abs(target - next) < 0.01;
+      zoomRef.current = finished ? target : next;
+      setZoom(zoomRef.current);
+      zoomFrame.current = finished ? 0 : requestAnimationFrame(animate);
+    };
     const zoomOnWheel = (event: WheelEvent) => {
       if (!event.ctrlKey || event.deltaY === 0) return;
       event.preventDefault();
       event.stopPropagation();
+      if (interaction.current) return;
       const canvas = section.querySelector(".timeline-canvas");
       const current = zoomRef.current;
-      const next = Math.max(
-        20,
-        Math.min(240, current + (event.deltaY < 0 ? 20 : -20)),
+      target = wheelZoom(
+        zoomFrame.current ? target : current,
+        event.deltaY,
+        event.deltaMode,
+        section.clientHeight,
       );
-      if (next === current) return;
       if (canvas) {
         const x = Math.max(
           12,
           event.clientX - canvas.getBoundingClientRect().left,
         );
+        const grid = canvas.querySelector<HTMLElement>(
+          ".timeline-editor-edit-area .ReactVirtualized__Grid",
+        );
         pendingZoom.current = {
-          time: ((scrollLeftRef.current + x - 12) * 5) / current,
+          time:
+            (((grid?.scrollLeft ?? scrollLeftRef.current) + x - 12) * 5) /
+            current,
           x,
         };
       }
-      zoomRef.current = next;
-      setZoom(next);
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        zoomRef.current = target;
+        setZoom(target);
+      } else if (!zoomFrame.current) {
+        previous = 0;
+        zoomFrame.current = requestAnimationFrame(animate);
+      }
     };
     // React's wheel listeners are passive; use a native listener so Ctrl+wheel
     // scales the timeline instead of triggering the browser's page zoom.
@@ -91,15 +136,18 @@ function EditorTimeline() {
       passive: false,
       capture: true,
     });
-    return () => section.removeEventListener("wheel", zoomOnWheel, true);
+    return () => {
+      section.removeEventListener("wheel", zoomOnWheel, true);
+      cancelAnimationFrame(zoomFrame.current);
+      interaction.current?.cancel();
+    };
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const anchor = pendingZoom.current;
     if (!anchor) return;
     const left = Math.max(0, (anchor.time * zoom) / 5 + 12 - anchor.x);
     scrollLeftRef.current = left;
     ref.current?.setScrollLeft(left);
-    pendingZoom.current = null;
   }, [zoom]);
   const segments = useMemo(() => activeSegments(p), [p]);
   const items = useMemo(() => {
@@ -254,6 +302,158 @@ function EditorTimeline() {
       }
     });
   };
+  const beginDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    dragged.current = false;
+    if (event.button !== 0 || busy || interaction.current) return;
+    const target = event.target as Element;
+    const element = target.closest<HTMLElement>(".timeline-editor-action");
+    const grid = element?.closest<HTMLElement>(".ReactVirtualized__Grid");
+    const area = element?.closest<HTMLElement>(".timeline-editor-edit-area");
+    if (
+      !element ||
+      !grid ||
+      !area ||
+      !element.classList.contains("timeline-editor-action-movable")
+    )
+      return;
+    const id =
+      element.querySelector<HTMLElement>(".clip-block")?.dataset.actionId;
+    const action = rows.flatMap((r) => r.actions).find((a) => a.id === id);
+    if (!action) return;
+    event.preventDefault();
+    event.stopPropagation();
+    cancelAnimationFrame(zoomFrame.current);
+    zoomFrame.current = 0;
+    pendingZoom.current = null;
+    const kind: DragKind = target.closest(
+      ".timeline-editor-action-left-stretch",
+    )
+      ? "left"
+      : target.closest(".timeline-editor-action-right-stretch")
+        ? "right"
+        : "move";
+    const original = { start: action.start, end: action.end };
+    const clip =
+      p.videos.find((v) => v.id === action.id) ||
+      p.music.find((v) => v.id === action.id);
+    const asset = clip && p.assets.find((a) => a.id === clip.assetId);
+    const bounds =
+      clip && asset && kind !== "move"
+        ? {
+            minStart: Math.max(0, clip.start - clip.in),
+            maxEnd: clip.start + asset.duration - clip.in,
+          }
+        : { minStart: 0, maxEnd: clip ? Infinity : total };
+    const targets = rows.flatMap((r) =>
+      r.actions
+        .filter((a) => a.id !== action.id)
+        .flatMap((a) => [a.start, a.end]),
+    );
+    targets.push(useStudio.getState().time);
+    const startX = event.clientX,
+      initialScroll = grid.scrollLeft,
+      pixelsPerSecond = zoom / 5;
+    const pointerId = event.pointerId;
+    let x = startX,
+      frame = 0,
+      active = false,
+      previous = performance.now();
+    let range = original;
+    const originLeft = 12 + original.start * pixelsPerSecond;
+    const paint = () => {
+      range = dragRange(
+        original,
+        (x - startX + grid.scrollLeft - initialScroll) / pixelsPerSecond,
+        kind,
+        bounds,
+      );
+      if (kind === "move")
+        element.style.transform = `translate3d(${(range.start - original.start) * pixelsPerSecond}px,0,0)`;
+      else {
+        element.style.left = `${12 + range.start * pixelsPerSecond}px`;
+        element.style.width = `${(range.end - range.start) * pixelsPerSecond}px`;
+      }
+    };
+    const tick = (now: number) => {
+      frame = 0;
+      const rect = grid.getBoundingClientRect(),
+        dt = Math.min(32, now - previous);
+      previous = now;
+      const outside =
+        x < rect.left + 20
+          ? x - rect.left - 20
+          : x > rect.right - 20
+            ? x - rect.right + 20
+            : 0;
+      if (outside)
+        grid.scrollLeft +=
+          (Math.max(-600, Math.min(600, outside * 8)) * dt) / 1000;
+      paint();
+      if (outside) frame = requestAnimationFrame(tick);
+    };
+    const move = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      x = e.clientX;
+      if (!active && Math.abs(x - startX) < 2) return;
+      active = true;
+      dragged.current = true;
+      element.classList.add("pointer-dragging");
+      if (!frame) {
+        previous = performance.now();
+        frame = requestAnimationFrame(tick);
+      }
+    };
+    const finish = (commit: boolean) => {
+      if (useStudio.getState().project !== p) commit = false;
+      cancelAnimationFrame(frame);
+      if (active) paint();
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", cancel, true);
+      window.removeEventListener("blur", cancel);
+      element.classList.remove("pointer-dragging");
+      element.style.transform = "";
+      if (commit && active) {
+        if (snap)
+          range = snapRange(range, kind, targets, 5 / pixelsPerSecond, bounds);
+        element.style.left = `${12 + range.start * pixelsPerSecond}px`;
+        element.style.width = `${(range.end - range.start) * pixelsPerSecond}px`;
+        if (
+          Math.abs(range.start - original.start) +
+            Math.abs(range.end - original.end) >
+          0.000001
+        )
+          modify(
+            action.id,
+            range.start,
+            range.end,
+            kind === "move" ? "move" : "trim",
+          );
+      } else {
+        element.style.left = `${originLeft}px`;
+        element.style.width = `${(original.end - original.start) * pixelsPerSecond}px`;
+      }
+      interaction.current = null;
+    };
+    const up = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return;
+      x = e.clientX;
+      e.stopPropagation();
+      finish(true);
+    };
+    const cancel = () => finish(false);
+    interaction.current = { cancel };
+    select(action.id);
+    window.addEventListener("pointermove", move, {
+      capture: true,
+      passive: false,
+    });
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", cancel, true);
+    window.addEventListener("blur", cancel);
+  };
   const split = () => {
     const time = useStudio.getState().time;
     const c =
@@ -328,7 +528,7 @@ function EditorTimeline() {
         <button
           className={snap ? "active-toggle" : ""}
           onClick={() => setSnap(!snap)}
-          title="吸附片段端点"
+          title="松开时吸附片段端点"
         >
           <Magnet size={15} />
         </button>
@@ -337,7 +537,7 @@ function EditorTimeline() {
         <button
           className="icon"
           aria-label="缩小时间轴"
-          onClick={() => setZoom(Math.max(20, zoom - 20))}
+          onClick={() => changeZoom(Math.max(20, zoom - 20))}
         >
           <Minus size={16} />
         </button>
@@ -347,13 +547,14 @@ function EditorTimeline() {
           type="range"
           min="20"
           max="240"
+          step="any"
           value={zoom}
-          onChange={(e) => setZoom(+e.target.value)}
+          onChange={(e) => changeZoom(+e.target.value)}
         />
         <button
           className="icon"
           aria-label="放大时间轴"
-          onClick={() => setZoom(Math.min(240, zoom + 20))}
+          onClick={() => changeZoom(Math.min(240, zoom + 20))}
         >
           <Plus size={16} />
         </button>
@@ -396,9 +597,7 @@ function EditorTimeline() {
         </div>
         <div
           className="timeline-canvas"
-          onPointerDownCapture={() => {
-            dragged.current = false;
-          }}
+          onPointerDownCapture={beginDrag}
           onClick={(event) => {
             const target = event.target as Element;
             if (
@@ -435,8 +634,8 @@ function EditorTimeline() {
             minScaleCount={Math.ceil(total / scale) + 6}
             style={{ width: "100%", height: "100%" }}
             gridSnap={false}
-            dragLine={snap}
-            disableDrag={!!busy}
+            dragLine={false}
+            disableDrag
             autoScroll
             autoReRender={false}
             onScroll={({ scrollTop, scrollLeft }) => {
@@ -465,44 +664,13 @@ function EditorTimeline() {
               select(v.action.id);
             }}
             onClickAction={(event) => event.stopPropagation()}
-            onActionMoveStart={({ action }) => {
-              dragged.current = true;
-              select(action.id);
-            }}
-            onActionResizeStart={({ action }) => {
-              dragged.current = true;
-              select(action.id);
-            }}
-            onActionMoveEnd={(v) => modify(v.action.id, v.start, v.end, "move")}
-            onActionMoving={({ start }) => start >= 0}
-            onActionResizing={({ action, start, end }) => {
-              const c =
-                p.videos.find((v) => v.id === action.id) ||
-                p.music.find((v) => v.id === action.id);
-              if (!c)
-                return (
-                  /^(d|s):/.test(action.id) &&
-                  start >= 0 &&
-                  end <= total &&
-                  end - start >= 0.04
-                );
-              const asset = p.assets.find((a) => a.id === c.assetId)!;
-              return (
-                start >= 0 &&
-                end - start >= 0.04 &&
-                c.in + start - c.start >= -0.0001 &&
-                c.in + end - c.start <= asset.duration + 0.0001
-              );
-            }}
-            onActionResizeEnd={(v) =>
-              modify(v.action.id, v.start, v.end, "trim")
-            }
             getScaleRender={(s) => <span>{timecode(s)}</span>}
             getActionRender={(action, row) => {
               const id = action.id.replace(/^[dso]:/, ""),
                 item = items.get(id);
               return (
                 <ClipBlock
+                  actionId={action.id}
                   track={row.id}
                   label={
                     (row.id === "subtitle" ? item?.subtitle : item?.text) || ""
@@ -521,6 +689,7 @@ function EditorTimeline() {
   );
 }
 const ClipBlock = memo(function ClipBlock({
+  actionId,
   track,
   label,
   selected,
@@ -528,6 +697,7 @@ const ClipBlock = memo(function ClipBlock({
   thumbnail,
   waveform,
 }: {
+  actionId: string;
   track: string;
   label: string;
   selected: boolean;
@@ -537,6 +707,7 @@ const ClipBlock = memo(function ClipBlock({
 }) {
   return (
     <div
+      data-action-id={actionId}
       className={`clip-block ${track}${selected ? " selected" : ""}${pending && track === "dub" ? " pending" : ""}`}
       title={label}
     >

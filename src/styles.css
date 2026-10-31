@@ -1148,6 +1148,11 @@ textarea {
   user-select: none;
   cursor: grab;
 }
+.timeline-editor-action.pointer-dragging {
+  cursor: grabbing;
+  will-change: transform;
+  z-index: 3;
+}
 .timeline-editor-action .timeline-editor-action-left-stretch,
 .timeline-editor-action .timeline-editor-action-right-stretch {
   top: 4px;
