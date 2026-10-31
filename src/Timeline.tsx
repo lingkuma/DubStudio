@@ -37,6 +37,23 @@ export default function EditorTimeline() {
     [snap, setSnap] = useState(true),
     [height, setHeight] = useState(300);
   const labelsRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (!section) return;
+    const zoomOnWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey || event.deltaY === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setZoom((value) =>
+        Math.max(20, Math.min(240, value + (event.deltaY < 0 ? 20 : -20))),
+      );
+    };
+    // React's wheel listeners are passive; use a native listener so Ctrl+wheel
+    // scales the timeline instead of triggering the browser's page zoom.
+    section.addEventListener("wheel", zoomOnWheel, { passive: false, capture: true });
+    return () => section.removeEventListener("wheel", zoomOnWheel, true);
+  }, []);
   const rows = useMemo<TimelineRow[]>(
     () => [
       {
@@ -173,7 +190,7 @@ export default function EditorTimeline() {
     ["music", "音乐", Music2],
   ] as const;
   return (
-    <section className="timeline-section" style={{ height }}>
+    <section className="timeline-section" ref={sectionRef} style={{ height }}>
       <div
         className="resize-handle"
         role="separator"
@@ -233,6 +250,7 @@ export default function EditorTimeline() {
         </button>
         <input
           aria-label="时间轴缩放"
+          title="Ctrl + 滚轮缩放时间轴"
           type="range"
           min="20"
           max="240"
