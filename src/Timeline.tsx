@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Timeline, type TimelineState } from "@xzdarcy/react-timeline-editor";
 import type { TimelineRow } from "@xzdarcy/timeline-engine";
 import "@xzdarcy/react-timeline-editor/dist/react-timeline-editor.css";
@@ -30,14 +30,34 @@ import {
   timecode,
 } from "./model";
 import { report } from "./actions";
-export default function EditorTimeline() {
-  const { project: p, time, selected, edit, set, busy } = useStudio(),
+const effects = {
+  video: { id: "video", name: "video" },
+  original: { id: "original", name: "original" },
+  dub: { id: "dub", name: "dub" },
+  subtitle: { id: "subtitle", name: "subtitle" },
+  music: { id: "music", name: "music" },
+};
+function EditorTimeline() {
+  const p = useStudio((s) => s.project),
+    selected = useStudio((s) => s.selected),
+    busy = useStudio((s) => s.busy),
+    edit = useStudio((s) => s.edit),
+    set = useStudio((s) => s.set),
     ref = useRef<TimelineState>(null),
     [zoom, setZoom] = useState(60),
     [snap, setSnap] = useState(true),
     [height, setHeight] = useState(300);
   const labelsRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
+  const scrollLeftRef = useRef(0);
+  const pendingZoom = useRef<{ time: number; x: number } | null>(null);
+  const dragged = useRef(false);
+  const total = useMemo(() => duration(p), [p]);
+  // Keep labels readable at every zoom while preserving the pixels/second ratio.
+  const scale = zoom < 40 ? 15 : zoom < 80 ? 5 : zoom < 160 ? 2 : 1;
+  const scaleWidth = (zoom / 5) * scale;
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
   useEffect(() => {
     const section = sectionRef.current;
     if (!section) return;
@@ -45,15 +65,81 @@ export default function EditorTimeline() {
       if (!event.ctrlKey || event.deltaY === 0) return;
       event.preventDefault();
       event.stopPropagation();
-      setZoom((value) =>
-        Math.max(20, Math.min(240, value + (event.deltaY < 0 ? 20 : -20))),
+      const canvas = section.querySelector(".timeline-canvas");
+      const current = zoomRef.current;
+      const next = Math.max(
+        20,
+        Math.min(240, current + (event.deltaY < 0 ? 20 : -20)),
       );
+      if (next === current) return;
+      if (canvas) {
+        const x = Math.max(
+          12,
+          event.clientX - canvas.getBoundingClientRect().left,
+        );
+        pendingZoom.current = {
+          time: ((scrollLeftRef.current + x - 12) * 5) / current,
+          x,
+        };
+      }
+      zoomRef.current = next;
+      setZoom(next);
     };
     // React's wheel listeners are passive; use a native listener so Ctrl+wheel
     // scales the timeline instead of triggering the browser's page zoom.
-    section.addEventListener("wheel", zoomOnWheel, { passive: false, capture: true });
+    section.addEventListener("wheel", zoomOnWheel, {
+      passive: false,
+      capture: true,
+    });
     return () => section.removeEventListener("wheel", zoomOnWheel, true);
   }, []);
+  useEffect(() => {
+    const anchor = pendingZoom.current;
+    if (!anchor) return;
+    const left = Math.max(0, (anchor.time * zoom) / 5 + 12 - anchor.x);
+    scrollLeftRef.current = left;
+    ref.current?.setScrollLeft(left);
+    pendingZoom.current = null;
+  }, [zoom]);
+  const segments = useMemo(() => activeSegments(p), [p]);
+  const items = useMemo(() => {
+    const assets = new Map(p.assets.map((a) => [a.id, a]));
+    return new Map<
+      string,
+      {
+        text: string;
+        subtitle?: string;
+        pending?: boolean;
+        thumbnail?: string;
+        waveform?: string;
+      }
+    >([
+      ...segments.map(
+        (s) =>
+          [
+            s.id,
+            {
+              text: s.text,
+              subtitle: s.subtitle,
+              pending: !takeFor(s),
+            },
+          ] as const,
+      ),
+      ...[...p.videos, ...p.music].map((v) => {
+        const a = assets.get(v.assetId);
+        return [
+          v.id,
+          {
+            text: a?.name || "",
+            thumbnail: a?.thumbnail,
+            waveform: a?.peaks
+              ?.map((h, i) => `M ${i} ${12 - h * 10} V ${12 + h * 10}`)
+              .join(" "),
+          },
+        ] as const;
+      }),
+    ]);
+  }, [p, segments]);
   const rows = useMemo<TimelineRow[]>(
     () => [
       {
@@ -78,7 +164,7 @@ export default function EditorTimeline() {
       },
       {
         id: "dub",
-        actions: activeSegments(p).map((s) => {
+        actions: segments.map((s) => {
           const at = placement(p, s)!,
             dub = dubPlacement(p, s);
           return {
@@ -86,20 +172,20 @@ export default function EditorTimeline() {
             start: dub?.start ?? Math.max(0, at.start + s.dubOffset),
             end: dub?.end ?? at.end + s.dubOffset,
             effectId: "dub",
-            maxEnd: duration(p),
+            maxEnd: total,
           };
         }),
       },
       {
         id: "subtitle",
-        actions: activeSegments(p).map((s) => {
+        actions: segments.map((s) => {
           const at = subtitlePlacement(p, s)!;
           return {
             id: "s:" + s.id,
             start: at.start,
             end: at.end,
             effectId: "subtitle",
-            maxEnd: duration(p),
+            maxEnd: total,
           };
         }),
       },
@@ -113,15 +199,18 @@ export default function EditorTimeline() {
         })),
       },
     ],
-    [p],
+    [p, segments, total],
   );
   useEffect(() => {
-    ref.current?.setTime(time);
-  }, [time]);
-  const select = (id: string) =>
-    set({
-      selected: id.replace(/^[dso]:/, ""),
+    ref.current?.setTime(useStudio.getState().time);
+    return useStudio.subscribe((state, previous) => {
+      if (state.time !== previous.time) ref.current?.setTime(state.time);
     });
+  }, []);
+  const select = (id: string) => {
+    const next = id.replace(/^[dso]:/, "");
+    if (useStudio.getState().selected !== next) set({ selected: next });
+  };
   const modify = (
     id: string,
     start: number,
@@ -154,15 +243,19 @@ export default function EditorTimeline() {
       const track = id.startsWith("d:") ? "dub" : "subtitle";
       if (kind === "trim") resizeSegment(p, s, track, start, end);
       else {
-        const current = track === "dub"
-          ? dubPlacement(p, s) ?? { start: Math.max(0, at.start + s.dubOffset) }
-          : subtitlePlacement(p, s)!;
+        const current =
+          track === "dub"
+            ? (dubPlacement(p, s) ?? {
+                start: Math.max(0, at.start + s.dubOffset),
+              })
+            : subtitlePlacement(p, s)!;
         if (track === "dub") s.dubOffset += start - current.start;
         else s.subtitleOffset += start - current.start;
       }
     });
   };
   const split = () => {
+    const time = useStudio.getState().time;
     const c =
       p.videos.find((v) => v.id === selected) ||
       p.videos.find((v) => time > v.start && time < v.start + v.out - v.in);
@@ -235,12 +328,12 @@ export default function EditorTimeline() {
         <button
           className={snap ? "active-toggle" : ""}
           onClick={() => setSnap(!snap)}
-          title="吸附"
+          title="吸附片段端点"
         >
           <Magnet size={15} />
         </button>
         <div className="spacer" />
-        <span className="meta">{timecode(duration(p))}</span>
+        <span className="meta">{timecode(total)}</span>
         <button
           className="icon"
           aria-label="缩小时间轴"
@@ -301,30 +394,53 @@ export default function EditorTimeline() {
             </div>
           ))}
         </div>
-        <div className="timeline-canvas">
+        <div
+          className="timeline-canvas"
+          onPointerDownCapture={() => {
+            dragged.current = false;
+          }}
+          onClick={(event) => {
+            const target = event.target as Element;
+            if (
+              dragged.current ||
+              !target.closest(".timeline-editor-edit-area") ||
+              target.closest(".timeline-editor-action, .timeline-editor-cursor")
+            )
+              return;
+            const grid = event.currentTarget.querySelector<HTMLElement>(
+              ".timeline-editor-edit-area .ReactVirtualized__Grid",
+            );
+            if (!grid) return;
+            const bounds = grid.getBoundingClientRect();
+            // Ignore the scrollbar itself, including the overlay scrollbar.
+            if (
+              event.clientY >= bounds.bottom - 4 ||
+              event.clientX >= bounds.left + grid.clientWidth
+            )
+              return;
+            const at =
+              ((event.clientX - bounds.left + grid.scrollLeft - 12) * 5) / zoom;
+            set({ time: Math.min(total, Math.max(0, at)), playing: false });
+          }}
+        >
           <Timeline
             ref={ref}
             editorData={rows}
-            effects={{
-              video: { id: "video", name: "video" },
-              original: { id: "original", name: "original" },
-              dub: { id: "dub", name: "dub" },
-              subtitle: { id: "subtitle", name: "subtitle" },
-              music: { id: "music", name: "music" },
-            }}
-            scale={5}
-            scaleWidth={zoom}
+            effects={effects}
+            scale={scale}
+            scaleWidth={scaleWidth}
             scaleSplitCount={5}
             startLeft={12}
             rowHeight={42}
-            minScaleCount={Math.ceil(duration(p) / 5) + 6}
+            minScaleCount={Math.ceil(total / scale) + 6}
             style={{ width: "100%", height: "100%" }}
-            gridSnap={snap}
+            gridSnap={false}
             dragLine={snap}
             disableDrag={!!busy}
             autoScroll
             autoReRender={false}
-            onScroll={({ scrollTop }) => {
+            onScroll={({ scrollTop, scrollLeft }) => {
+              scrollLeftRef.current = scrollLeft;
               labelsRef.current
                 ?.querySelectorAll<HTMLElement>(".track-label")
                 .forEach((el) => {
@@ -333,14 +449,14 @@ export default function EditorTimeline() {
             }}
             onClickTimeArea={(t) => {
               set({
-                time: Math.min(duration(p), Math.max(0, t)),
+                time: Math.min(total, Math.max(0, t)),
                 playing: false,
               });
               return true;
             }}
             onCursorDrag={(t) =>
               set({
-                time: Math.min(duration(p), Math.max(0, t)),
+                time: Math.min(total, Math.max(0, t)),
                 playing: false,
               })
             }
@@ -348,8 +464,15 @@ export default function EditorTimeline() {
               e.stopPropagation();
               select(v.action.id);
             }}
-            onActionMoveStart={({ action }) => select(action.id)}
-            onActionResizeStart={({ action }) => select(action.id)}
+            onClickAction={(event) => event.stopPropagation()}
+            onActionMoveStart={({ action }) => {
+              dragged.current = true;
+              select(action.id);
+            }}
+            onActionResizeStart={({ action }) => {
+              dragged.current = true;
+              select(action.id);
+            }}
             onActionMoveEnd={(v) => modify(v.action.id, v.start, v.end, "move")}
             onActionMoving={({ start }) => start >= 0}
             onActionResizing={({ action, start, end }) => {
@@ -359,7 +482,9 @@ export default function EditorTimeline() {
               if (!c)
                 return (
                   /^(d|s):/.test(action.id) &&
-                  start >= 0 && end <= duration(p) && end - start >= 0.04
+                  start >= 0 &&
+                  end <= total &&
+                  end - start >= 0.04
                 );
               const asset = p.assets.find((a) => a.id === c.assetId)!;
               return (
@@ -375,52 +500,18 @@ export default function EditorTimeline() {
             getScaleRender={(s) => <span>{timecode(s)}</span>}
             getActionRender={(action, row) => {
               const id = action.id.replace(/^[dso]:/, ""),
-                s = p.segments.find((s) => s.id === id),
-                v =
-                  p.videos.find((v) => v.id === id) ||
-                  p.music.find((v) => v.id === id),
-                a = v && p.assets.find((a) => a.id === v.assetId);
-              const label = s
-                ? row.id === "subtitle"
-                  ? s.subtitle
-                  : s.text
-                : a?.name || "";
+                item = items.get(id);
               return (
-                <div
-                  className={
-                    "clip-block " +
-                    row.id +
-                    (selected === id ? " selected" : "") +
-                    (s && !takeFor(s) && row.id === "dub" ? " pending" : "")
+                <ClipBlock
+                  track={row.id}
+                  label={
+                    (row.id === "subtitle" ? item?.subtitle : item?.text) || ""
                   }
-                  title={label}
-                >
-                  {row.id === "video" && a?.thumbnail && (
-                    <img alt="" src={a.thumbnail} />
-                  )}
-                  <span>{label}</span>
-                  {row.id === "original" && a?.peaks && (
-                    <svg
-                      viewBox="0 0 160 24"
-                      preserveAspectRatio="none"
-                      className="waveform"
-                    >
-                      {a.peaks.map((h, i) => (
-                        <path
-                          key={i}
-                          d={
-                            "M " +
-                            i +
-                            " " +
-                            (12 - h * 10) +
-                            " V " +
-                            (12 + h * 10)
-                          }
-                        />
-                      ))}
-                    </svg>
-                  )}
-                </div>
+                  selected={selected === id}
+                  pending={!!item?.pending}
+                  thumbnail={item?.thumbnail}
+                  waveform={item?.waveform}
+                />
               );
             }}
           />
@@ -429,3 +520,38 @@ export default function EditorTimeline() {
     </section>
   );
 }
+const ClipBlock = memo(function ClipBlock({
+  track,
+  label,
+  selected,
+  pending,
+  thumbnail,
+  waveform,
+}: {
+  track: string;
+  label: string;
+  selected: boolean;
+  pending: boolean;
+  thumbnail?: string;
+  waveform?: string;
+}) {
+  return (
+    <div
+      className={`clip-block ${track}${selected ? " selected" : ""}${pending && track === "dub" ? " pending" : ""}`}
+      title={label}
+    >
+      {track === "video" && thumbnail && <img alt="" src={thumbnail} />}
+      <span>{label}</span>
+      {track === "original" && waveform && (
+        <svg
+          viewBox="0 0 160 24"
+          preserveAspectRatio="none"
+          className="waveform"
+        >
+          <path d={waveform} />
+        </svg>
+      )}
+    </div>
+  );
+});
+export default memo(EditorTimeline);

@@ -1121,11 +1121,17 @@ textarea {
   height: 32px !important;
   border-bottom: 1px solid #e8edf4 !important;
 }
-.timeline-editor-scale {
-  color: #7d899c !important;
+.timeline-editor-time-unit {
+  border-right-color: var(--line) !important;
 }
-.timeline-editor-scale > span {
-  font-size: 9px !important;
+.timeline-editor-time-unit-scale {
+  color: #252b36 !important;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.timeline-editor-time-unit-scale > span {
+  font-size: inherit;
 }
 .timeline-editor-edit-row {
   background: #fff !important;
@@ -1138,22 +1144,53 @@ textarea {
   background: transparent !important;
   border-radius: 5px !important;
   overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
 }
 .timeline-editor-action .timeline-editor-action-left-stretch,
 .timeline-editor-action .timeline-editor-action-right-stretch {
-  background: #98afd5 !important;
-  opacity: 0.4;
+  top: 4px;
+  height: 34px;
+  width: 8px;
+  max-width: 40%;
+  border-radius: 0;
+  background: transparent !important;
+  color: var(--muted);
+  opacity: 1;
   cursor: ew-resize;
+  z-index: 2;
+  touch-action: none;
+}
+.timeline-editor-action .timeline-editor-action-left-stretch::after,
+.timeline-editor-action .timeline-editor-action-right-stretch::after {
+  content: "";
+  border: 0;
+  border-radius: 1px;
+  background: currentColor;
+  width: 2px;
+  height: 16px;
+  top: 9px;
+  bottom: auto;
+  left: 3px;
+  right: auto;
+  margin: 0;
 }
 .timeline-editor-action:hover .timeline-editor-action-left-stretch,
 .timeline-editor-action:hover .timeline-editor-action-right-stretch {
-  opacity: 0.8;
+  color: var(--blue);
 }
 .timeline-editor-cursor {
   border-color: #e27567 !important;
+  pointer-events: none;
+}
+.timeline-editor-cursor-area {
+  height: 12px !important;
+  pointer-events: auto;
 }
 .timeline-editor-cursor-top {
   border-color: #e27567 transparent transparent !important;
+  pointer-events: auto;
 }
 .timeline-editor-drag-line {
   border-color: #6690d9 !important;
@@ -1173,7 +1210,7 @@ textarea {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 0 8px;
+  padding: 0 10px;
   z-index: 1;
 }
 .clip-block.video {
