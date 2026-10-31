@@ -1,3 +1,4 @@
+import { readPanelSize, savePanelSize } from "./PanelSeparator";
 import {
   memo,
   useEffect,
@@ -6,6 +7,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
+import "./timelineGrid";
 import { Timeline, type TimelineState } from "@xzdarcy/react-timeline-editor";
 import type { TimelineRow } from "@xzdarcy/timeline-engine";
 import "@xzdarcy/react-timeline-editor/dist/react-timeline-editor.css";
@@ -39,6 +42,7 @@ import {
 import { report } from "./actions";
 import {
   dragRange,
+  anchoredZoom,
   snapRange,
   wheelZoom,
   type DragKind,
@@ -57,78 +61,100 @@ function EditorTimeline() {
     edit = useStudio((s) => s.edit),
     set = useStudio((s) => s.set),
     ref = useRef<TimelineState>(null),
-    [zoom, setZoom] = useState(60),
+    [viewport, setViewport] = useState({ zoom: 60, origin: 12 }),
     [snap, setSnap] = useState(true),
-    [height, setHeight] = useState(300);
+    [height, setHeight] = useState(() =>
+      Math.min(readPanelSize("timeline", 300), window.innerHeight * 0.6),
+    );
+  useEffect(() => {
+    savePanelSize("timeline", height);
+  }, [height]);
   const labelsRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const scrollLeftRef = useRef(0);
-  const pendingZoom = useRef<{ time: number; x: number } | null>(null);
+  const zoomScrollRef = useRef<number | null>(null);
+  const pendingScroll = useRef<number | null>(null);
   const dragged = useRef(false);
   const interaction = useRef<{ cancel: () => void } | null>(null);
-  const zoomFrame = useRef(0);
+  const { zoom, origin } = viewport;
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+  const [viewportWidth, setViewportWidth] = useState(1600);
   const total = useMemo(() => duration(p), [p]);
+  const geometryRef = useRef({ total, width: viewportWidth });
+  geometryRef.current = { total, width: viewportWidth };
   // Keep labels readable at every zoom while preserving the pixels/second ratio.
-  const scale = zoom < 40 ? 15 : zoom < 80 ? 5 : zoom < 160 ? 2 : 1;
+  const scale = 1;
+  const labelStep = zoom < 40 ? 15 : zoom < 80 ? 5 : zoom < 160 ? 2 : 1;
   const scaleWidth = (zoom / 5) * scale;
-  const zoomRef = useRef(zoom);
-  zoomRef.current = zoom;
   const changeZoom = (value: number) => {
-    cancelAnimationFrame(zoomFrame.current);
-    zoomFrame.current = 0;
-    pendingZoom.current = null;
-    if (!interaction.current) setZoom(value);
+    if (interaction.current) return;
+    const grid = sectionRef.current?.querySelector<HTMLElement>(
+      ".timeline-editor-edit-area .ReactVirtualized__Grid",
+    );
+    const view = anchoredZoom(
+      zoom,
+      grid?.scrollLeft ?? scrollLeftRef.current,
+      viewportWidth / 2,
+      value,
+      total,
+      viewportWidth,
+    );
+    pendingScroll.current = view.scroll;
+    zoomScrollRef.current = view.scroll;
+    setViewport({ zoom: value, origin: 12 });
   };
   useEffect(() => {
     const section = sectionRef.current;
     if (!section) return;
-    let target = zoomRef.current,
-      previous = 0;
-    const animate = (now: number) => {
-      const dt = previous ? Math.min(32, now - previous) : 16;
-      previous = now;
-      const next =
-        zoomRef.current + (target - zoomRef.current) * (1 - Math.exp(-dt / 40));
-      const finished = Math.abs(target - next) < 0.01;
-      zoomRef.current = finished ? target : next;
-      setZoom(zoomRef.current);
-      zoomFrame.current = finished ? 0 : requestAnimationFrame(animate);
-    };
+    const canvas = section.querySelector<HTMLElement>(".timeline-canvas");
+    const resize = new ResizeObserver(() => {
+      if (canvas) setViewportWidth(canvas.clientWidth);
+    });
+    if (canvas) resize.observe(canvas);
     const zoomOnWheel = (event: WheelEvent) => {
       if (!event.ctrlKey || event.deltaY === 0) return;
       event.preventDefault();
       event.stopPropagation();
       if (interaction.current) return;
-      const canvas = section.querySelector(".timeline-canvas");
-      const current = zoomRef.current;
-      target = wheelZoom(
-        zoomFrame.current ? target : current,
+      if (!canvas) return;
+      const current = viewportRef.current;
+      const next = wheelZoom(
+        current.zoom,
         event.deltaY,
         event.deltaMode,
         section.clientHeight,
       );
-      if (canvas) {
-        const x = Math.max(
-          12,
+      if (next === current.zoom) return;
+      const x = Math.max(
+        0,
+        Math.min(
+          canvas.clientWidth,
           event.clientX - canvas.getBoundingClientRect().left,
-        );
-        const grid = canvas.querySelector<HTMLElement>(
-          ".timeline-editor-edit-area .ReactVirtualized__Grid",
-        );
-        pendingZoom.current = {
-          time:
-            (((grid?.scrollLeft ?? scrollLeftRef.current) + x - 12) * 5) /
-            current,
-          x,
-        };
-      }
-      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        zoomRef.current = target;
-        setZoom(target);
-      } else if (!zoomFrame.current) {
-        previous = 0;
-        zoomFrame.current = requestAnimationFrame(animate);
-      }
+        ),
+      );
+      const grid = canvas.querySelector<HTMLElement>(
+        ".timeline-editor-edit-area .ReactVirtualized__Grid",
+      );
+      const actualScroll = grid?.scrollLeft ?? scrollLeftRef.current;
+      // Browsers round scrollLeft to pixels. Preserve the fractional remainder
+      // across small wheel deltas instead of losing it at every input event.
+      const logicalScroll = zoomScrollRef.current;
+      const view = anchoredZoom(
+        current.zoom,
+        logicalScroll !== null && Math.abs(logicalScroll - actualScroll) <= 1
+          ? logicalScroll
+          : actualScroll,
+        x,
+        next,
+        geometryRef.current.total,
+        canvas.clientWidth,
+      );
+      pendingScroll.current = view.scroll;
+      zoomScrollRef.current = view.scroll;
+      // Commit scale, origin and scroll before handling another wheel event.
+      // No easing or delayed frames: equal wheel deltas give equal zoom changes.
+      flushSync(() => setViewport({ zoom: view.zoom, origin: view.origin }));
     };
     // React's wheel listeners are passive; use a native listener so Ctrl+wheel
     // scales the timeline instead of triggering the browser's page zoom.
@@ -138,17 +164,17 @@ function EditorTimeline() {
     });
     return () => {
       section.removeEventListener("wheel", zoomOnWheel, true);
-      cancelAnimationFrame(zoomFrame.current);
+      resize.disconnect();
       interaction.current?.cancel();
     };
   }, []);
   useLayoutEffect(() => {
-    const anchor = pendingZoom.current;
-    if (!anchor) return;
-    const left = Math.max(0, (anchor.time * zoom) / 5 + 12 - anchor.x);
+    const left = pendingScroll.current;
+    if (left === null) return;
     scrollLeftRef.current = left;
     ref.current?.setScrollLeft(left);
-  }, [zoom]);
+    pendingScroll.current = null;
+  }, [viewport]);
   const segments = useMemo(() => activeSegments(p), [p]);
   const items = useMemo(() => {
     const assets = new Map(p.assets.map((a) => [a.id, a]));
@@ -247,7 +273,9 @@ function EditorTimeline() {
         })),
       },
     ],
-    [p, segments, total],
+    // New row identity invalidates the virtualized grid's scrolling cache.
+    // Otherwise blocks can keep the previous zoom for the scroll debounce.
+    [p, segments, total, viewport],
   );
   useEffect(() => {
     ref.current?.setTime(useStudio.getState().time);
@@ -303,6 +331,7 @@ function EditorTimeline() {
     });
   };
   const beginDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    zoomScrollRef.current = null;
     dragged.current = false;
     if (event.button !== 0 || busy || interaction.current) return;
     const target = event.target as Element;
@@ -322,9 +351,7 @@ function EditorTimeline() {
     if (!action) return;
     event.preventDefault();
     event.stopPropagation();
-    cancelAnimationFrame(zoomFrame.current);
-    zoomFrame.current = 0;
-    pendingZoom.current = null;
+    pendingScroll.current = null;
     const kind: DragKind = target.closest(
       ".timeline-editor-action-left-stretch",
     )
@@ -359,7 +386,7 @@ function EditorTimeline() {
       active = false,
       previous = performance.now();
     let range = original;
-    const originLeft = 12 + original.start * pixelsPerSecond;
+    const originLeft = origin + original.start * pixelsPerSecond;
     const paint = () => {
       range = dragRange(
         original,
@@ -370,7 +397,7 @@ function EditorTimeline() {
       if (kind === "move")
         element.style.transform = `translate3d(${(range.start - original.start) * pixelsPerSecond}px,0,0)`;
       else {
-        element.style.left = `${12 + range.start * pixelsPerSecond}px`;
+        element.style.left = `${origin + range.start * pixelsPerSecond}px`;
         element.style.width = `${(range.end - range.start) * pixelsPerSecond}px`;
       }
     };
@@ -418,7 +445,7 @@ function EditorTimeline() {
       if (commit && active) {
         if (snap)
           range = snapRange(range, kind, targets, 5 / pixelsPerSecond, bounds);
-        element.style.left = `${12 + range.start * pixelsPerSecond}px`;
+        element.style.left = `${origin + range.start * pixelsPerSecond}px`;
         element.style.width = `${(range.end - range.start) * pixelsPerSecond}px`;
         if (
           Math.abs(range.start - original.start) +
@@ -488,6 +515,23 @@ function EditorTimeline() {
         className="resize-handle"
         role="separator"
         aria-label="调整时间轴高度"
+        aria-orientation="horizontal"
+        aria-valuenow={Math.round(height)}
+        tabIndex={0}
+        onDoubleClick={() => setHeight(300)}
+        onKeyDown={(e) => {
+          if (!["ArrowUp", "ArrowDown"].includes(e.key)) return;
+          e.preventDefault();
+          setHeight(
+            Math.max(
+              220,
+              Math.min(
+                window.innerHeight * 0.6,
+                height + (e.key === "ArrowUp" ? 20 : -20),
+              ),
+            ),
+          );
+        }}
         onPointerDown={(e) => {
           const y = e.clientY,
             h = height;
@@ -501,9 +545,11 @@ function EditorTimeline() {
           const up = () => {
             window.removeEventListener("pointermove", move);
             window.removeEventListener("pointerup", up);
+            window.removeEventListener("pointercancel", up);
           };
           window.addEventListener("pointermove", move);
           window.addEventListener("pointerup", up);
+          window.addEventListener("pointercancel", up);
         }}
       />
       <div className="timeline-toolbar">
@@ -618,7 +664,8 @@ function EditorTimeline() {
             )
               return;
             const at =
-              ((event.clientX - bounds.left + grid.scrollLeft - 12) * 5) / zoom;
+              ((event.clientX - bounds.left + grid.scrollLeft - origin) * 5) /
+              zoom;
             set({ time: Math.min(total, Math.max(0, at)), playing: false });
           }}
         >
@@ -628,10 +675,12 @@ function EditorTimeline() {
             effects={effects}
             scale={scale}
             scaleWidth={scaleWidth}
-            scaleSplitCount={5}
-            startLeft={12}
+            scaleSplitCount={zoom >= 160 ? 5 : zoom >= 80 ? 2 : 1}
+            startLeft={origin}
             rowHeight={42}
-            minScaleCount={Math.ceil(total / scale) + 6}
+            minScaleCount={
+              Math.ceil(total / scale + viewportWidth / scaleWidth) + 1
+            }
             style={{ width: "100%", height: "100%" }}
             gridSnap={false}
             dragLine={false}
@@ -664,7 +713,11 @@ function EditorTimeline() {
               select(v.action.id);
             }}
             onClickAction={(event) => event.stopPropagation()}
-            getScaleRender={(s) => <span>{timecode(s)}</span>}
+            getScaleRender={(s) =>
+              s <= total && s % labelStep === 0 ? (
+                <span>{timecode(s)}</span>
+              ) : null
+            }
             getActionRender={(action, row) => {
               const id = action.id.replace(/^[dso]:/, ""),
                 item = items.get(id);

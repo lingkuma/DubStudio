@@ -111,6 +111,12 @@ export type Project = {
   subtitleSize: number;
   subtitleColor: string;
   subtitleBackground: boolean;
+  subtitleBackgroundColor?: string;
+  subtitleBackgroundOpacity?: number;
+  subtitleFont?: string;
+  subtitleBold?: boolean;
+  subtitleOutlineWidth?: number;
+  subtitleOutlineColor?: string;
   subtitleY: number;
   created: number;
   updated: number;

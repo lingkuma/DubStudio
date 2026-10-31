@@ -52,3 +52,14 @@ The sample exports prove timing and technical media validity. A human audition i
 ## Review provenance
 
 The isolated finish reviewer was dispatched and retried, but the tool returned unrelated “task empty” responses. The rendered UI review was therefore completed locally under the same five-section review checklist; see .impeccable/finish-review.md. This is not an independent agent approval.
+
+
+## 2026-10-31 Subtitle, panel sizing and concurrent dubbing update
+
+- Unit regressions: 62 tests across 7 files pass, including pool capacity 10, refill on out-of-order completion/failure, shared single/batch deduplication, live capacity changes, cancellation/recovery, project switch protection, editing/undo during generation, original audition timestamps and subtitle rendering compatibility.
+- Ego-browser integration used a separate local origin (5185) and the existing private project fixture. TTS responses were simulated; this update did not submit paid cloud generation jobs. Clicking two different sentence buttons submitted two independent jobs while other sentences stayed editable. Batch enqueue then reported 10 active / 3 waiting for 13 sentences. Completing job 7 immediately submitted job 10 (10 active / 2 waiting). Raising capacity to 12 submitted all remaining work; all 13 finished ready with no duplicate submissions.
+- Real source playback (not mocked) began at source 8.90s with volume 1, unmuted, and stopped at approximately 11.463s for the 11.46s source endpoint. Generated-take playback and click-to-stop were also exercised. This confirms playback behavior, not subjective voice quality.
+- Real pointer drags changed transcript width 335→405px, inspector width 320→360px and timeline height 300→260px. Reload retained those sizes and the user-set concurrency of 12. Desktop had no document overflow.
+- Subtitle UI accepted font size 40, Songti font, blue background #2563eb and opacity 100%; all 8 background presets were present. Preview showed the configured font/background. Numeric fields preserve partially typed values and normalize on blur.
+- Desktop and 390×844 mobile captures were inspected locally. Mobile has no document overflow and hides desktop splitters in favor of the existing stacked layout/drawer. Closing punctuation remains attached to the preceding subtitle line at larger font sizes. Concurrency input sits directly beside the generation button.
+- Production build succeeds. The existing react-virtualized module-directive warning remains non-blocking. Existing unrelated timeline interaction changes in the working tree were retained.

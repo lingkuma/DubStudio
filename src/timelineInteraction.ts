@@ -7,9 +7,43 @@ export function wheelZoom(
   pageHeight: number,
 ) {
   const pixels = delta * (mode === 1 ? 16 : mode === 2 ? pageHeight : 1);
-  return clampZoom(
-    value * Math.exp(-Math.max(-200, Math.min(200, pixels)) * 0.002),
-  );
+  return clampZoom(value - pixels * 0.12);
+}
+
+export const maxTimelineScroll = (
+  zoom: number,
+  duration: number,
+  width: number,
+) => Math.max(0, 24 + (duration * zoom) / 5 - width);
+
+// Zoom IN always follows the pointer, including when either edge is visible.
+// Only zoom OUT is constrained by the project edges. Zero never moves into
+// artificial leading space to preserve an otherwise impossible anchor.
+export function anchoredZoom(
+  zoom: number,
+  scroll: number,
+  x: number,
+  nextZoom: number,
+  duration: number,
+  width: number,
+) {
+  const time = ((scroll + x - 12) * 5) / zoom;
+  const requestedScroll = (time * nextZoom) / 5 + 12 - x;
+  const oldMax = maxTimelineScroll(zoom, duration, width);
+  const nextMax = maxTimelineScroll(nextZoom, duration, width);
+  const nextScroll =
+    nextZoom > zoom
+      ? Math.max(0, requestedScroll)
+      : scroll <= 1
+        ? 0
+        : scroll >= oldMax - 1
+          ? nextMax
+          : Math.max(0, Math.min(nextMax, requestedScroll));
+  return {
+    zoom: nextZoom,
+    origin: 12,
+    scroll: nextScroll,
+  };
 }
 
 export type DragRange = { start: number; end: number };

@@ -308,10 +308,12 @@ export default function Inspector({ tab }: { tab: "properties" | "voice" }) {
             配音时长
             <select
               value={s.fit}
-              onChange={(e) => patch({
-                fit: e.target.value as Segment["fit"],
-                dubDuration: undefined,
-              })}
+              onChange={(e) =>
+                patch({
+                  fit: e.target.value as Segment["fit"],
+                  dubDuration: undefined,
+                })
+              }
             >
               <option value="fit">匹配原句 · 保持音高</option>
               <option value="natural">自然时长 · 允许延伸</option>
@@ -360,15 +362,6 @@ export default function Inspector({ tab }: { tab: "properties" | "voice" }) {
               step=".05"
               value={s.dubOffset}
               onChange={(e) => patch({ dubOffset: +e.target.value })}
-            />
-          </label>
-          <label>
-            字幕偏移（秒）
-            <input
-              type="number"
-              step=".05"
-              value={s.subtitleOffset}
-              onChange={(e) => patch({ subtitleOffset: +e.target.value })}
             />
           </label>
           {s.takes.length > 0 && (
@@ -526,73 +519,6 @@ export default function Inspector({ tab }: { tab: "properties" | "voice" }) {
         <Music2 size={15} />
         添加背景音乐
       </button>
-      <hr />
-      <h3>字幕样式</h3>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={p.subtitles}
-          onChange={(e) =>
-            edit((p) => {
-              p.subtitles = e.target.checked;
-            })
-          }
-        />
-        预览与导出显示字幕
-      </label>
-      <label>
-        字号
-        <input
-          type="number"
-          min="12"
-          max="120"
-          value={p.subtitleSize}
-          onChange={(e) =>
-            edit((p) => {
-              p.subtitleSize = Math.max(12, Math.min(120, +e.target.value));
-            })
-          }
-        />
-      </label>
-      <label>
-        文字颜色
-        <input
-          type="color"
-          value={p.subtitleColor}
-          onChange={(e) =>
-            edit((p) => {
-              p.subtitleColor = e.target.value;
-            })
-          }
-        />
-      </label>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={p.subtitleBackground}
-          onChange={(e) =>
-            edit((p) => {
-              p.subtitleBackground = e.target.checked;
-            })
-          }
-        />
-        半透明字幕底色
-      </label>
-      <label className="slider-label">
-        <span>字幕垂直位置</span>
-        <input
-          type="range"
-          min=".15"
-          max=".95"
-          step=".01"
-          value={p.subtitleY}
-          onChange={(e) =>
-            edit((p) => {
-              p.subtitleY = +e.target.value;
-            })
-          }
-        />
-      </label>
     </div>
   );
 }

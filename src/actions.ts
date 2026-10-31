@@ -1,6 +1,7 @@
 import { useStudio } from "./store";
 import {
   activeSegments,
+  canResumeGeneration,
   duration,
   parseTranscript,
   placement,
@@ -19,6 +20,7 @@ import {
 } from "./media";
 import { download, getMedia, mediaUrl } from "./storage";
 import { pollTts, submitTts, transcribe } from "./providers";
+import { GenerationPool } from "./generationPool";
 let controller: AbortController | null = null;
 export function cancelTask() {
   controller?.abort();
@@ -31,7 +33,11 @@ export async function task<T>(
   label: string,
   fn: (signal: AbortSignal) => Promise<T>,
 ): Promise<T | undefined> {
-  if (useStudio.getState().busy) {
+  if (
+    useStudio.getState().busy ||
+    useStudio.getState().generationActive ||
+    useStudio.getState().generationQueued
+  ) {
     report("请等待当前任务完成，或先停止当前任务");
     return;
   }
@@ -158,141 +164,274 @@ export async function recognize() {
     });
   });
 }
-export async function generate(ids: string[], resume = false) {
+const generationPool = new GenerationPool(
+  () => useStudio.getState().generationConcurrency,
+  (generationActive, generationQueued) =>
+    useStudio.getState().set({ generationActive, generationQueued }),
+);
+export function cancelGeneration() {
+  generationPool.cancel();
+}
+useStudio.subscribe((state, previous) => {
+  if (state.project.id !== previous.project.id) {
+    cancelGeneration();
+    stopAudition();
+  }
+  if (state.generationConcurrency !== previous.generationConcurrency)
+    generationPool.pump();
+  if ((state.playing && !previous.playing) || (state.busy && !previous.busy))
+    stopAudition();
+});
+export async function generate(ids: string[], resume?: boolean) {
+  if (useStudio.getState().busy) {
+    report("请等待当前任务完成后再生成配音");
+    return;
+  }
   if (!ids.length) {
     report("没有需要生成的句子");
     return 0;
   }
-  return task("准备克隆配音", async (signal) => {
-    const projectId = useStudio.getState().project.id;
-    let completed = 0;
-    for (const id of [...new Set(ids)]) {
-      if (signal.aborted) throw new DOMException("取消", "AbortError");
-      const state = useStudio.getState(),
-        seg = state.project.segments.find((s) => s.id === id);
-      if (!seg) continue;
-      try {
-        let jobId = resume ? seg.taskId : undefined;
-        const selectedVoiceId = jobId
-          ? (seg.jobVoiceId ?? seg.voiceId ?? "")
-          : seg.voiceId || "";
-        const generationReferenceKey = jobId
-          ? seg.jobReferenceKey
-          : referenceKey(state.project, seg);
-        let voice: Voice | undefined = state.project.voices.find(
-          (v) => v.id === selectedVoiceId,
-        );
-        if (!jobId && selectedVoiceId && !voice)
-          throw new Error("所选自定义音色已不存在，请重新选择音源");
-        const text = resume && seg.taskId ? seg.jobText || seg.text : seg.text;
-        let originalReference: Blob | undefined;
-        if (!jobId && !voice) {
-          const clip = state.project.videos.find((v) => v.id === seg.clipId);
-          if (!clip) throw new Error("找不到这句话对应的视频素材");
-          originalReference = await extractAudioSegment(
-            clip.assetId,
-            seg.sourceStart,
-            seg.sourceEnd - seg.sourceStart,
-          );
-          voice = {
-            id: "",
-            name: "当前句子原声",
-            assetId: "",
-            method: "与音色参考音频相同",
-            emotions: {},
-            random: false,
+  const projectId = useStudio.getState().project.id;
+  const jobs = [...new Set(ids)].flatMap((id) => {
+    const key = projectId + ":" + id;
+    if (!useStudio.getState().project.segments.some((s) => s.id === id))
+      return [];
+    if (!generationPool.has(key))
+      useStudio.getState().edit((p) => {
+        const s = p.segments.find((s) => s.id === id)!;
+        s.status = "queued";
+        s.error = "";
+      }, false);
+    return [
+      generationPool.enqueue(
+        key,
+        async (signal) => {
+          const ensureCurrent = () => {
+            signal.throwIfAborted();
+            if (
+              useStudio.getState().project.id !== projectId ||
+              !useStudio.getState().project.segments.some((s) => s.id === id)
+            )
+              throw new Error("工程或句子已变更");
           };
-        }
-        state.edit((p) => {
-          const s = p.segments.find((s) => s.id === id)!;
-          s.status = "queued";
-          s.error = "";
-          s.jobText = text;
-          s.jobVoiceId = selectedVoiceId;
-          s.jobReferenceKey = generationReferenceKey;
-          s.taskId = jobId;
-        }, false);
-        if (!jobId)
-          jobId = await submitTts(
-            text,
-            voice!,
-            state.settings,
-            signal,
-            originalReference,
-          );
-        useStudio.getState().edit((p) => {
-          const s = p.segments.find((s) => s.id === id);
-          if (s) {
-            s.taskId = jobId;
-            s.status = "generating";
-          }
-        }, false);
-        useStudio
-          .getState()
-          .set({ busy: "克隆配音 " + (completed + 1) + " / " + ids.length });
-        const blob = await pollTts(
-          jobId,
-          state.settings,
-          (status) => {
-            if (["FAILED", "FAILURE", "ERROR", "CANCELLED"].includes(status)) {
-              useStudio.getState().edit((p) => {
-                const row = p.segments.find((s) => s.id === id);
-                if (row) row.taskId = undefined;
-              }, false);
+          try {
+            ensureCurrent();
+            const state = useStudio.getState(),
+              seg = state.project.segments.find((s) => s.id === id)!;
+            // Batch generation resumes a matching cloud job rather than paying twice.
+            const shouldResume =
+              resume ?? canResumeGeneration(state.project, seg);
+            let jobId = shouldResume ? seg.taskId : undefined;
+            const selectedVoiceId = jobId
+              ? (seg.jobVoiceId ?? seg.voiceId ?? "")
+              : seg.voiceId || "";
+            const generationReferenceKey = jobId
+              ? seg.jobReferenceKey
+              : referenceKey(state.project, seg);
+            let voice: Voice | undefined = state.project.voices.find(
+              (v) => v.id === selectedVoiceId,
+            );
+            if (!jobId && selectedVoiceId && !voice)
+              throw new Error("所选自定义音色已不存在，请重新选择音源");
+            const text =
+              shouldResume && seg.taskId ? seg.jobText || seg.text : seg.text;
+            if (!text.trim()) throw new Error("请输入配音文本");
+            let originalReference: Blob | undefined;
+            if (!jobId && !voice) {
+              const clip = state.project.videos.find(
+                (v) => v.id === seg.clipId,
+              );
+              if (!clip) throw new Error("找不到这句话对应的视频素材");
+              originalReference = await extractAudioSegment(
+                clip.assetId,
+                seg.sourceStart,
+                seg.sourceEnd - seg.sourceStart,
+              );
+              voice = {
+                id: "",
+                name: "当前句子原声",
+                assetId: "",
+                method: "与音色参考音频相同",
+                emotions: {},
+                random: false,
+              };
             }
-          },
-          signal,
-        );
-        if (useStudio.getState().project.id !== projectId)
-          throw new Error("工程已切换");
-        const asset = await registerMedia(
-          blob,
-          "配音 " + text.slice(0, 18) + ".wav",
-          "audio",
-        );
-        useStudio.getState().edit((p) => {
-          p.assets.push(asset);
-          const s = p.segments.find((s) => s.id === id);
-          if (!s) return;
-          const take = {
-            id: uid(),
-            assetId: asset.id,
-            text,
-            voiceId: selectedVoiceId,
-            referenceKey: generationReferenceKey,
-            created: Date.now(),
-            duration: asset.duration,
-          };
-          s.takes.push(take);
-          s.takeId = take.id;
-          s.status = "ready";
-          s.taskId = undefined;
-        }, false);
-        completed++;
-        useStudio.getState().set({ progress: completed / ids.length });
-      } catch (e) {
-        useStudio.getState().edit((p) => {
-          const s = p.segments.find((s) => s.id === id);
-          if (s) {
-            s.status = "error";
-            s.error = e instanceof Error ? e.message : String(e);
+            ensureCurrent();
+            state.edit((p) => {
+              const s = p.segments.find((s) => s.id === id)!;
+              s.status = "queued";
+              s.error = "";
+              s.jobText = text;
+              s.jobVoiceId = selectedVoiceId;
+              s.jobReferenceKey = generationReferenceKey;
+              s.taskId = jobId;
+            }, false);
+            if (!jobId)
+              jobId = await submitTts(
+                text,
+                voice!,
+                state.settings,
+                signal,
+                originalReference,
+              );
+            // Keep a returned job ID even if the user just stopped local waiting.
+            if (useStudio.getState().project.id !== projectId)
+              throw new Error("工程已切换");
+            useStudio.getState().edit((p) => {
+              const s = p.segments.find((s) => s.id === id);
+              if (s) {
+                s.taskId = jobId;
+                s.status = "generating";
+              }
+            }, false);
+            ensureCurrent();
+            const blob = await pollTts(
+              jobId,
+              state.settings,
+              (status) => {
+                if (
+                  ["FAILED", "FAILURE", "ERROR", "CANCELLED"].includes(status)
+                ) {
+                  ensureCurrent();
+                  useStudio.getState().edit((p) => {
+                    const row = p.segments.find((s) => s.id === id);
+                    if (row) row.taskId = undefined;
+                  }, false);
+                }
+              },
+              signal,
+            );
+            ensureCurrent();
+            const asset = await registerMedia(
+              blob,
+              "配音 " + text.slice(0, 18) + ".wav",
+              "audio",
+            );
+            ensureCurrent();
+            useStudio.getState().edit((p) => {
+              p.assets.push(asset);
+              const s = p.segments.find((s) => s.id === id);
+              if (!s) return;
+              const take = {
+                id: uid(),
+                assetId: asset.id,
+                text,
+                voiceId: selectedVoiceId,
+                referenceKey: generationReferenceKey,
+                created: Date.now(),
+                duration: asset.duration,
+              };
+              s.takes.push(take);
+              s.takeId = take.id;
+              s.status = "ready";
+              s.taskId = undefined;
+            }, false);
+            return true;
+          } catch (e) {
+            if (useStudio.getState().project.id === projectId)
+              useStudio.getState().edit((p) => {
+                const s = p.segments.find((s) => s.id === id);
+                if (s) {
+                  s.status = "error";
+                  s.error = signal.aborted
+                    ? "已停止本地等待。云端任务可能继续，可点击继续查询。"
+                    : e instanceof Error
+                      ? e.message
+                      : String(e);
+                }
+              }, false);
+            return false;
           }
-        }, false);
-        throw e;
-      }
-    }
-    useStudio.getState().set({ notice: "已完成 " + completed + " 段克隆配音" });
-    return completed;
+        },
+        () => {
+          if (useStudio.getState().project.id !== projectId) return;
+          useStudio.getState().edit((p) => {
+            const s = p.segments.find((s) => s.id === id);
+            if (s) {
+              s.status = s.taskId ? "error" : "idle";
+              s.error = "已取消排队";
+            }
+          }, false);
+        },
+      ),
+    ];
   });
+  const results = await Promise.all(jobs);
+  const completed = results.filter(Boolean).length;
+  if (useStudio.getState().project.id === projectId)
+    report(
+      "已完成 " +
+        completed +
+        " / " +
+        jobs.length +
+        " 段克隆配音" +
+        (completed < jobs.length ? "，未完成的句子可查看原因后重试" : ""),
+    );
+  return completed;
 }
 let audition: HTMLAudioElement | undefined;
-export async function auditionSegment(id: string) {
+let auditionRequest = 0;
+let auditionCleanup: (() => void) | undefined;
+export function stopAudition() {
+  auditionRequest++;
   audition?.pause();
-  const s = useStudio.getState().project.segments.find((v) => v.id === id),
-    t = s && takeFor(s);
-  if (!t) throw new Error("这句话还没有配音，请先生成");
-  audition = new Audio(await mediaUrl(t.assetId));
-  await audition.play();
+  auditionCleanup?.();
+  auditionCleanup = undefined;
+  audition = undefined;
+  useStudio.getState().set({ auditioning: null });
+}
+export async function auditionSegment(
+  id: string,
+  source: "original" | "dub" = "dub",
+) {
+  if (useStudio.getState().auditioning === id + ":" + source) {
+    stopAudition();
+    return;
+  }
+  stopAudition();
+  const request = auditionRequest;
+  useStudio.getState().set({ playing: false, auditioning: id + ":" + source });
+  try {
+    const p = useStudio.getState().project,
+      s = p.segments.find((v) => v.id === id);
+    if (!s) throw new Error("找不到这句话");
+    const clip = p.videos.find((c) => c.id === s.clipId),
+      take = takeFor(s);
+    if (source === "dub" && !take)
+      throw new Error("这句话还没有配音，请先生成");
+    if (source === "original" && !clip) throw new Error("找不到原视频");
+    const url = await mediaUrl(
+      source === "original" ? clip!.assetId : take!.assetId,
+    );
+    if (request !== auditionRequest) return;
+    const audio = new Audio(url);
+    audition = audio;
+    audio.onended = () => request === auditionRequest && stopAudition();
+    audio.onerror = () => {
+      if (request !== auditionRequest) return;
+      stopAudition();
+      report("音频播放失败，请检查素材音轨或重新导入");
+    };
+    if (source === "original") {
+      const end = s.sourceEnd;
+      const timer = setInterval(() => {
+        if (audio.currentTime >= end) stopAudition();
+      }, 25);
+      auditionCleanup = () => {
+        clearInterval(timer);
+        audio.onloadedmetadata = null;
+      };
+      audio.onloadedmetadata = () => {
+        if (request === auditionRequest) audio.currentTime = s.sourceStart;
+      };
+    }
+    await audio.play();
+    if (request !== auditionRequest) audio.pause();
+  } catch (e) {
+    if (request !== auditionRequest) return;
+    stopAudition();
+    throw e;
+  }
 }
 export async function exportVideo() {
   return task("准备导出视频", async (signal) => {

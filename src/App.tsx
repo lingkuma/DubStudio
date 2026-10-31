@@ -12,6 +12,7 @@ import {
   Search,
   Mic,
   Play,
+  Square,
   Check,
   AlertCircle,
   Sparkles,
@@ -40,6 +41,7 @@ import {
   addVideo,
   auditionSegment,
   cancelTask,
+  cancelGeneration,
   exportVideo,
   generate,
   recognize,
@@ -56,6 +58,9 @@ import {
 import Preview from "./Preview";
 import EditorTimeline from "./Timeline";
 import Inspector from "./Inspector";
+import SubtitleInspector from "./SubtitleInspector";
+import NumberField from "./NumberField";
+import PanelSeparator, { usePanelSize } from "./PanelSeparator";
 import VoiceSourceSelect from "./VoiceSourceSelect";
 import AIPanel from "./AIPanel";
 import { ImportDialog, Modal, SettingsDialog } from "./Dialogs";
@@ -63,12 +68,18 @@ export default function App() {
   const st = useStudio(),
     { project: p, selected, time, busy, progress, notice, edit, set } = st,
     [dialog, showDialog] = useState(""),
-    [right, setRight] = useState<"ai" | "properties" | "voice">("ai"),
+    [right, setRight] = useState<"ai" | "properties" | "voice" | "subtitle">(
+      "ai",
+    ),
     [search, searchSet] = useState(""),
     [saved, savedSet] = useState("本地工程"),
     [restoreReady, ready] = useState(false),
     [aiSeed, seed] = useState(""),
     [panelOpen, openPanel] = useState(false);
+  const [leftWidth, resizeLeft] = usePanelSize("transcript", 335);
+  const [rightWidth, resizeRight] = usePanelSize("inspector", 320);
+  const generating = st.generationActive + st.generationQueued > 0;
+  const locked = !!busy || generating;
   const input = useRef<HTMLInputElement>(null),
     open = useRef<HTMLInputElement>(null),
     rows = activeSegments(p),
@@ -210,7 +221,7 @@ export default function App() {
         <button
           className="compact-button"
           title="新建工程"
-          disabled={!!busy}
+          disabled={locked}
           onClick={() => showDialog("new")}
         >
           <Plus size={16} />
@@ -218,7 +229,7 @@ export default function App() {
         <div className="history-buttons">
           <button
             className="icon"
-            disabled={!st.past.length || !!busy}
+            disabled={!st.past.length || locked}
             title="撤销 Ctrl Z"
             onClick={st.undo}
           >
@@ -226,7 +237,7 @@ export default function App() {
           </button>
           <button
             className="icon"
-            disabled={!st.future.length || !!busy}
+            disabled={!st.future.length || locked}
             title="重做 Ctrl Shift Z"
             onClick={st.redo}
           >
@@ -235,7 +246,7 @@ export default function App() {
         </div>
         <button
           className="compact-button"
-          disabled={!!busy}
+          disabled={locked}
           onClick={() => open.current?.click()}
           title="打开工程"
         >
@@ -244,7 +255,7 @@ export default function App() {
         </button>
         <button
           className="compact-button"
-          disabled={!!busy}
+          disabled={locked}
           onClick={() => task("打包工程", async () => exportProject(p))}
           title="保存包含素材的工程包"
         >
@@ -260,7 +271,7 @@ export default function App() {
         </button>
         <button
           className="primary export-button"
-          disabled={!p.videos.length || !!busy}
+          disabled={!p.videos.length || locked}
           onClick={() => showDialog("export")}
         >
           <Download size={16} />
@@ -290,7 +301,15 @@ export default function App() {
           e.target.value = "";
         }}
       />
-      <main className="workspace">
+      <main
+        className="workspace"
+        style={
+          {
+            "--transcript-width": leftWidth + "px",
+            "--inspector-width": rightWidth + "px",
+          } as React.CSSProperties
+        }
+      >
         <aside className="transcript-panel">
           <div className="panel-heading">
             <strong>台词工作台</strong>
@@ -298,7 +317,7 @@ export default function App() {
             <button
               className="icon"
               title="新增一句"
-              disabled={!p.videos.length || !!busy}
+              disabled={!p.videos.length || locked}
               onClick={addSentence}
             >
               <Plus size={16} />
@@ -307,7 +326,7 @@ export default function App() {
           <div className="transcript-tools">
             <button
               className="primary subtle"
-              disabled={!p.videos.length || !!busy}
+              disabled={!p.videos.length || locked}
               onClick={() =>
                 rows.length ? showDialog("recognize") : recognize()
               }
@@ -316,7 +335,7 @@ export default function App() {
               识别字幕
             </button>
             <button
-              disabled={!p.videos.length || !!busy}
+              disabled={!p.videos.length || locked}
               onClick={() => showDialog("import")}
             >
               <FileInput size={15} />
@@ -400,14 +419,14 @@ export default function App() {
                       ) : take ? (
                         <Check size={12} />
                       ) : null}
-                      {stale
-                        ? "待更新"
-                        : s.status === "error"
-                          ? "失败"
-                          : s.status === "generating"
-                            ? "生成中"
-                            : s.status === "queued"
-                              ? "排队"
+                      {s.status === "error"
+                        ? "失败"
+                        : s.status === "generating"
+                          ? "生成中"
+                          : s.status === "queued"
+                            ? "排队"
+                            : stale
+                              ? "待更新"
                               : take
                                 ? "已配音"
                                 : "未配音"}
@@ -431,41 +450,6 @@ export default function App() {
                       })
                     }
                   />
-                  {selected === s.id && (
-                    <>
-                      <label className="check sync-caption">
-                        <input
-                          type="checkbox"
-                          checked={s.syncText}
-                          disabled={!!busy}
-                          onChange={(e) =>
-                            edit((p) => {
-                              const row = p.segments.find(
-                                (x) => x.id === s.id,
-                              )!;
-                              row.syncText = e.target.checked;
-                              if (row.syncText) row.subtitle = row.text;
-                            })
-                          }
-                        />
-                        字幕与配音文本同步
-                      </label>
-                      {!s.syncText && (
-                        <textarea
-                          aria-label={"第" + (index + 1) + "句字幕"}
-                          rows={2}
-                          value={s.subtitle}
-                          disabled={!!busy}
-                          onChange={(e) =>
-                            edit((p) => {
-                              p.segments.find((x) => x.id === s.id)!.subtitle =
-                                e.target.value;
-                            })
-                          }
-                        />
-                      )}
-                    </>
-                  )}
                   <VoiceSourceSelect
                     project={p}
                     segment={s}
@@ -484,31 +468,67 @@ export default function App() {
                     <div className="spacer" />
                     <button
                       className="text-button"
+                      title="编辑这句字幕"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        set({ selected: s.id });
+                        setRight("subtitle");
+                        openPanel(true);
+                      }}
+                    >
+                      字幕
+                    </button>
+                    <button
+                      className="text-button"
+                      disabled={!!busy}
+                      title="试听原视频中这句话的声音"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        auditionSegment(s.id, "original").catch(report);
+                      }}
+                    >
+                      {st.auditioning === s.id + ":original" ? (
+                        <Square size={12} />
+                      ) : (
+                        <Play size={12} />
+                      )}
+                      原声
+                    </button>
+                    <button
+                      className="text-button"
                       disabled={!take || !!busy}
                       onClick={(e) => {
                         e.stopPropagation();
                         auditionSegment(s.id).catch(report);
                       }}
                     >
-                      <Play size={12} />
-                      试听
+                      {st.auditioning === s.id + ":dub" ? (
+                        <Square size={12} />
+                      ) : (
+                        <Play size={12} />
+                      )}
+                      配音
                     </button>
                     <button
                       className="generate-button"
-                      disabled={!!busy}
+                      disabled={
+                        !!busy || ["queued", "generating"].includes(s.status)
+                      }
                       onClick={(e) => {
                         e.stopPropagation();
                         void generate([s.id], resumable);
                       }}
                     >
                       <Mic size={12} />
-                      {resumable
-                        ? "继续查询"
-                        : s.taskId
-                          ? "按配置生成"
-                          : take
-                            ? "重新生成"
-                            : "克隆"}
+                      {["queued", "generating"].includes(s.status)
+                        ? "处理中"
+                        : resumable
+                          ? "继续查询"
+                          : s.taskId
+                            ? "按配置生成"
+                            : take
+                              ? "重新生成"
+                              : "克隆"}
                     </button>
                   </div>
                   {s.error && <p className="error-text">{s.error}</p>}
@@ -517,24 +537,63 @@ export default function App() {
             })}
           </div>
           <div className="transcript-footer">
-            <span>
-              {rows.filter((s) => takeFor(s)).length} / {rows.length} 句已配音
-            </span>
-            <button
-              disabled={!rows.length || !!busy}
-              onClick={() =>
-                generate(
-                  rows
-                    .filter((s) => !s.muted && needsGeneration(p, s))
-                    .map((s) => s.id),
-                )
-              }
-            >
-              <Mic size={14} />
-              生成待更新
-            </button>
+            <div className="generation-summary" role="status">
+              <span>
+                {rows.filter((s) => takeFor(s)).length} / {rows.length} 句已配音
+              </span>
+              {generating && (
+                <span>
+                  {st.generationActive} 条运行 · {st.generationQueued} 条排队
+                </span>
+              )}
+            </div>
+            <div className="generation-controls">
+              <label className="concurrency-control">
+                并发
+                <NumberField
+                  aria-label="配音并发数量"
+                  min={1}
+                  max={50}
+                  step="1"
+                  value={st.generationConcurrency}
+                  onValueChange={st.setGenerationConcurrency}
+                />
+              </label>
+              <button
+                disabled={
+                  !!busy ||
+                  !rows.some(
+                    (s) =>
+                      !s.muted &&
+                      needsGeneration(p, s) &&
+                      !["queued", "generating"].includes(s.status),
+                  )
+                }
+                onClick={() =>
+                  void generate(
+                    rows
+                      .filter(
+                        (s) =>
+                          !s.muted &&
+                          needsGeneration(p, s) &&
+                          !["queued", "generating"].includes(s.status),
+                      )
+                      .map((s) => s.id),
+                  )
+                }
+              >
+                <Mic size={14} />
+                生成待更新
+              </button>
+              {generating && (
+                <button className="text-button" onClick={cancelGeneration}>
+                  停止
+                </button>
+              )}
+            </div>
           </div>
         </aside>
+        <PanelSeparator side="left" size={leftWidth} resize={resizeLeft} />
         <div className="center-panel">
           <div className="media-toolbar">
             <button disabled={!!busy} onClick={() => input.current?.click()}>
@@ -592,6 +651,7 @@ export default function App() {
             <span>拖动时间轴调整位置</span>
           </div>
         </div>
+        <PanelSeparator side="right" size={rightWidth} resize={resizeRight} />
         <aside className={"right-panel " + right + (panelOpen ? " open" : "")}>
           <div className="right-tabs">
             <button
@@ -607,6 +667,13 @@ export default function App() {
             >
               <SlidersHorizontal size={15} />
               属性
+            </button>
+            <button
+              className={right === "subtitle" ? "active" : ""}
+              onClick={() => setRight("subtitle")}
+            >
+              <Subtitles size={15} />
+              字幕
             </button>
             <button
               className={right === "voice" ? "active" : ""}
@@ -627,7 +694,11 @@ export default function App() {
             <AIPanel seed={aiSeed} clearSeed={() => seed("")} />
           ) : (
             <fieldset className="inspector-lock" disabled={!!busy}>
-              <Inspector tab={right} />
+              {right === "subtitle" ? (
+                <SubtitleInspector />
+              ) : (
+                <Inspector tab={right} />
+              )}
             </fieldset>
           )}
         </aside>

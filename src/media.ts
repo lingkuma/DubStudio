@@ -1,3 +1,5 @@
+import { paintSubtitles } from "./subtitleRenderer";
+export { paintSubtitles, subtitleLines } from "./subtitleRenderer";
 import {
   AudioClip,
   Combinator,
@@ -319,67 +321,6 @@ export async function mixAudio(p: Project): Promise<AudioBuffer> {
     for (let i = 0; i < x.length; i++) x[i] = Math.max(-1, Math.min(1, x[i]));
   }
   return b;
-}
-export function subtitleLines(
-  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  text: string,
-  width: number,
-) {
-  const lines: string[] = [];
-  for (const paragraph of text.split("\n")) {
-    let line = "";
-    for (const char of paragraph) {
-      if (ctx.measureText(line + char).width > width && line) {
-        lines.push(line);
-        line = char;
-      } else line += char;
-    }
-    if (line) lines.push(line);
-  }
-  return lines;
-}
-export function paintSubtitles(
-  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  p: Project,
-  time: number,
-  width: number,
-  height: number,
-) {
-  if (!p.subtitles) return;
-  const current = activeSegments(p).filter((s) => {
-    const at = subtitlePlacement(p, s)!;
-    return time >= at.start && time < at.end;
-  });
-  if (!current.length) return;
-  const size = (p.subtitleSize * height) / p.height;
-  ctx.font = "600 " + size + "px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  const lines = current.flatMap((s) =>
-      subtitleLines(ctx, s.subtitle, width * 0.84),
-    ),
-    lineHeight = size * 1.45,
-    bottom = height * p.subtitleY,
-    start = bottom - (lines.length - 1) * lineHeight;
-  lines.forEach((line, i) => {
-    const y = start + i * lineHeight,
-      w = ctx.measureText(line).width;
-    if (p.subtitleBackground) {
-      ctx.fillStyle = "rgba(0,0,0,.72)";
-      ctx.fillRect(
-        (width - w) / 2 - size * 0.4,
-        y - size * 0.65,
-        w + size * 0.8,
-        size * 1.3,
-      );
-    } else {
-      ctx.strokeStyle = "rgba(0,0,0,.8)";
-      ctx.lineWidth = Math.max(2, size * 0.1);
-      ctx.strokeText(line, width / 2, y);
-    }
-    ctx.fillStyle = p.subtitleColor;
-    ctx.fillText(line, width / 2, y);
-  });
 }
 class CaptionClip implements IClip {
   readonly meta;
