@@ -75,6 +75,28 @@ export async function asrAudio(id: string) {
   s.start();
   return wav(await off.startRendering());
 }
+export async function extractAudioSegment(
+  id: string,
+  start: number,
+  length: number,
+  sampleRate = 24000,
+) {
+  const b = await decode(id);
+  if (!Number.isFinite(start) || !Number.isFinite(length) ||
+    start < 0 || start >= b.duration || length <= 0)
+    throw new Error("原句时间戳超出素材音轨，请在属性中调整语音起止时间");
+  const safeLength = Math.min(length, b.duration - start);
+  const context = new OfflineAudioContext(
+    1,
+    Math.ceil(safeLength * sampleRate),
+    sampleRate,
+  );
+  const source = context.createBufferSource();
+  source.buffer = b;
+  source.connect(context.destination);
+  source.start(0, start, safeLength);
+  return wav(await context.startRendering());
+}
 export async function registerMedia(
   file: Blob,
   name: string,

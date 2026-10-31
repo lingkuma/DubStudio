@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Check, Settings2, FileInput, Sparkles } from "lucide-react";
+import { X, Check, FileInput, Sparkles } from "lucide-react";
 import { useStudio } from "./store";
-import { activeSegments, parseSrt, type Segment, uid } from "./model";
+import { activeSegments, parseSrt, type Channel, type Connection, type Segment, uid } from "./model";
 import { api } from "./providers";
 import { report } from "./actions";
 export function Modal({
@@ -80,7 +80,66 @@ export function SettingsDialog({ close }: { close: () => void }) {
     [status, statusSet] = useState(""),
     [checking, checkState] = useState(false);
   const field = (key: keyof typeof s, value: unknown) =>
-    update({ ...s, [key]: value });
+    update((current) => ({ ...current, [key]: value }));
+  const connectionFields = (channel: Channel, name: string) => {
+    const connection = s.connections[channel];
+    const change = (key: keyof Connection, value: unknown) =>
+      update((current) => ({
+        ...current,
+        connections: {
+          ...current.connections,
+          [channel]: { ...current.connections[channel], [key]: value },
+        },
+      }));
+    return (
+      <div className="channel-connection">
+        <label>
+          连接方式
+          <select aria-label={name + "连接方式"} value={connection.transport}
+            onChange={(e) => change("transport", e.target.value)}>
+            <option value="direct">浏览器直连</option>
+            <option value="gateway">同站 / 自定义网关</option>
+            <option value="worker">自定义 Worker 转发</option>
+          </select>
+        </label>
+        {connection.transport === "gateway" && (
+          <label>
+            网关地址
+            <input aria-label={name + "网关地址"} value={connection.gateway}
+              placeholder="/api/gateway 或兼容网关完整地址"
+              onChange={(e) => change("gateway", e.target.value)} />
+          </label>
+        )}
+        {connection.transport === "worker" && (
+          <>
+            <label>
+              Worker 地址
+              <input aria-label={name + "Worker 地址"} value={connection.workerUrl}
+                placeholder="https://proxy.example/?url={url}"
+                onChange={(e) => change("workerUrl", e.target.value)} />
+            </label>
+            <p className="help">{"{url} 传入编码后的目标 URL；{rawUrl} 传入原始 URL。不写占位符时自动添加 ?url= 参数。"}</p>
+          </>
+        )}
+        {channel !== "ai" && connection.transport === "direct" && (
+          <>
+            <label className="check">
+              <input type="checkbox" checked={connection.downloadFallback}
+                onChange={(e) => change("downloadFallback", e.target.checked)} />
+              结果文件跨域时使用网关下载
+            </label>
+            {connection.downloadFallback && (
+              <label>
+                结果下载网关
+                <input aria-label={name + "结果下载网关"} value={connection.gateway}
+                  onChange={(e) => change("gateway", e.target.value)} />
+              </label>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
   const check = async (type: string) => {
     checkState(true);
     statusSet("正在连接…");
@@ -95,44 +154,18 @@ export function SettingsDialog({ close }: { close: () => void }) {
   };
   return (
     <Modal title="API 与工作区设置" close={close} wide>
+      <div className="settings-basics">
+        <p className="help">各渠道独立选择连接方式与代理地址。视频处理在本地浏览器完成，Key 默认仅保存于本次会话。</p>
+        <label className="check">
+          <input type="checkbox" checked={s.remember}
+            onChange={(e) => field("remember", e.target.checked)} />
+          在此设备记住 API Key
+        </label>
+      </div>
       <div className="settings-grid">
         <section>
-          <h3>
-            <Settings2 size={17} />
-            连接方式
-          </h3>
-          <label>
-            请求方式
-            <select
-              value={s.transport}
-              onChange={(e) => field("transport", e.target.value)}
-            >
-              <option value="gateway">同站代理 · Vercel 默认推荐</option>
-              <option value="direct">浏览器直连 · 需要 API 支持跨域</option>
-            </select>
-          </label>
-          {s.transport === "gateway" && (
-            <label>
-              代理路径
-              <input
-                value={s.gateway}
-                onChange={(e) => field("gateway", e.target.value)}
-              />
-            </label>
-          )}
-          <p className="help">
-            视频处理在本地浏览器完成。同站函数仅转发 API 与结果文件。Key
-            默认仅保存于本次浏览器会话。
-          </p>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={s.remember}
-              onChange={(e) => field("remember", e.target.checked)}
-            />
-            在此设备记住 API Key
-          </label>
           <h3>语音识别 · 阿里百炼</h3>
+          {connectionFields("asr", "百炼")}
           <label>
             API Key
             <input
@@ -178,6 +211,12 @@ export function SettingsDialog({ close }: { close: () => void }) {
         </section>
         <section>
           <h3>克隆配音 · AutoDL</h3>
+          {connectionFields("tts", "AutoDL")}
+          <label>
+            Base URL
+            <input aria-label="AutoDL Base URL" value={s.autodlBase}
+              onChange={(e) => field("autodlBase", e.target.value)} />
+          </label>
           <label>
             AutoDL Token
             <input
@@ -189,7 +228,7 @@ export function SettingsDialog({ close }: { close: () => void }) {
             />
           </label>
           <p className="help">
-            工作流：indextts2-v1。上传音色参考后，每一句都可独立生成。
+            工作流：indextts2-v1。默认用每句原视频时间戳内的原声克隆，也可逐句选择自定义音色。
           </p>
           <button
             disabled={checking || !s.autodlKey}
@@ -201,6 +240,7 @@ export function SettingsDialog({ close }: { close: () => void }) {
             <Sparkles size={17} />
             AI 二创助手
           </h3>
+          {connectionFields("ai", "AI")}
           <label>
             OpenAI 兼容 Base URL
             <input
@@ -321,7 +361,7 @@ export function ImportDialog({
             text: q.text,
             subtitle: q.text,
             syncText: true,
-            voiceId: p.voices[0]?.id || "",
+            voiceId: "",
             takes: [],
             status: "idle",
             dubOffset: 0,

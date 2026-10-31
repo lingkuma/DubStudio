@@ -5,10 +5,18 @@ import {
   parseTranscript,
   placement,
   takeFor,
+  needsGeneration,
+  referenceKey,
   uid,
   type Segment,
+  type Voice,
 } from "./model";
-import { asrAudio, decode, registerMedia, renderVideo, wav } from "./media";
+import {
+  asrAudio,
+  extractAudioSegment,
+  registerMedia,
+  renderVideo,
+} from "./media";
 import { download, getMedia, mediaUrl } from "./storage";
 import { pollTts, submitTts, transcribe } from "./providers";
 let controller: AbortController | null = null;
@@ -100,9 +108,6 @@ export async function addVoice(file: File, emotion = false, voiceId?: string) {
       },
       random: false,
     });
-    p.segments.forEach((s) => {
-      if (!s.voiceId) s.voiceId = id;
-    });
   });
   return a;
 }
@@ -140,7 +145,7 @@ export async function recognize() {
       );
       const p = useStudio.getState().project;
       for (const clip of p.videos.filter((c) => c.assetId === id))
-        result.push(...parseTranscript(data, clip, p.voices[0]?.id));
+        result.push(...parseTranscript(data, clip));
     }
     if (!result.length) throw new Error("没有识别到语音，请检查视频音轨");
     useStudio.getState().edit((p) => {
@@ -166,23 +171,55 @@ export async function generate(ids: string[], resume = false) {
       const state = useStudio.getState(),
         seg = state.project.segments.find((s) => s.id === id);
       if (!seg) continue;
-      const voice = state.project.voices.find(
-        (v) => v.id === (resume && seg.taskId ? seg.jobVoiceId : seg.voiceId),
-      );
-      if (!voice)
-        throw new Error("请先在「音色」中上传参考声音，并给句子选择音色");
-      const text = resume && seg.taskId ? seg.jobText || seg.text : seg.text;
-      let jobId = resume ? seg.taskId : undefined;
-      state.edit((p) => {
-        const s = p.segments.find((s) => s.id === id)!;
-        s.status = "queued";
-        s.error = "";
-        s.jobText = text;
-        s.jobVoiceId = voice.id;
-      }, false);
       try {
+        let jobId = resume ? seg.taskId : undefined;
+        const selectedVoiceId = jobId
+          ? (seg.jobVoiceId ?? seg.voiceId ?? "")
+          : seg.voiceId || "";
+        const generationReferenceKey = jobId
+          ? seg.jobReferenceKey
+          : referenceKey(state.project, seg);
+        let voice: Voice | undefined = state.project.voices.find(
+          (v) => v.id === selectedVoiceId,
+        );
+        if (!jobId && selectedVoiceId && !voice)
+          throw new Error("所选自定义音色已不存在，请重新选择音源");
+        const text = resume && seg.taskId ? seg.jobText || seg.text : seg.text;
+        let originalReference: Blob | undefined;
+        if (!jobId && !voice) {
+          const clip = state.project.videos.find((v) => v.id === seg.clipId);
+          if (!clip) throw new Error("找不到这句话对应的视频素材");
+          originalReference = await extractAudioSegment(
+            clip.assetId,
+            seg.sourceStart,
+            seg.sourceEnd - seg.sourceStart,
+          );
+          voice = {
+            id: "",
+            name: "当前句子原声",
+            assetId: "",
+            method: "与音色参考音频相同",
+            emotions: {},
+            random: false,
+          };
+        }
+        state.edit((p) => {
+          const s = p.segments.find((s) => s.id === id)!;
+          s.status = "queued";
+          s.error = "";
+          s.jobText = text;
+          s.jobVoiceId = selectedVoiceId;
+          s.jobReferenceKey = generationReferenceKey;
+          s.taskId = jobId;
+        }, false);
         if (!jobId)
-          jobId = await submitTts(text, voice, state.settings, signal);
+          jobId = await submitTts(
+            text,
+            voice!,
+            state.settings,
+            signal,
+            originalReference,
+          );
         useStudio.getState().edit((p) => {
           const s = p.segments.find((s) => s.id === id);
           if (s) {
@@ -221,7 +258,8 @@ export async function generate(ids: string[], resume = false) {
             id: uid(),
             assetId: asset.id,
             text,
-            voiceId: voice.id,
+            voiceId: selectedVoiceId,
+            referenceKey: generationReferenceKey,
             created: Date.now(),
             duration: asset.duration,
           };
@@ -260,10 +298,7 @@ export async function exportVideo() {
   return task("准备导出视频", async (signal) => {
     const p = structuredClone(useStudio.getState().project);
     const stale = activeSegments(p).filter(
-      (s) =>
-        takeFor(s) &&
-        !s.muted &&
-        (takeFor(s)!.text !== s.text || takeFor(s)!.voiceId !== s.voiceId),
+      (s) => takeFor(s) && !s.muted && needsGeneration(p, s),
     );
     if (stale.length)
       throw new Error(
@@ -287,17 +322,10 @@ export async function voiceFromSegment(id: string) {
     s = st.project.segments.find((v) => v.id === id);
   if (!s) throw new Error("请先选择一句话");
   const clip = st.project.videos.find((v) => v.id === s.clipId)!;
-  const b = await decode(clip.assetId),
-    len = s.sourceEnd - s.sourceStart;
-  if (len < 1) throw new Error("这句太短，请选择至少一秒的原声片段");
-  const context = new OfflineAudioContext(1, Math.ceil(len * 24000), 24000),
-    source = context.createBufferSource();
-  source.buffer = b;
-  source.connect(context.destination);
-  source.start(0, s.sourceStart, len);
-  const out = await context.startRendering();
+  const len = s.sourceEnd - s.sourceStart;
+  const out = await extractAudioSegment(clip.assetId, s.sourceStart, len);
   await addVoice(
-    new File([wav(out)], "原声参考 " + s.original.slice(0, 10) + ".wav", {
+    new File([out], "原声参考 " + s.original.slice(0, 10) + ".wav", {
       type: "audio/wav",
     }),
   );

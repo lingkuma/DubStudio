@@ -26,17 +26,16 @@ describe("API adapter routing", () => {
       "oss://test.wav",
     ]);
   });
-  it("rejects arbitrary proxy targets and credential-bearing URLs", async () => {
+  it("rejects credential-bearing and private proxy targets while allowing custom HTTPS targets", async () => {
     await expect(
       dispatch({ action: "download", url: "https://127.0.0.1/private" }),
     ).rejects.toThrow();
-    await expect(
-      dispatch({
-        action: "ai-chat",
-        key: "k",
-        aiBase: "https://evil.example/v1",
-      }),
-    ).rejects.toThrow();
+    const fetch = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetch);
+    await dispatch({ action: "ai-chat", key: "k", aiBase: "https://example.com/v1" });
+    expect(fetch).toHaveBeenCalled();
+    expect(fetch.mock.calls[0][0]).toBe("https://example.com/v1/chat/completions");
+    expect(fetch.mock.calls[0][1].redirect).toBe("error");
     await expect(
       dispatch({
         action: "asr-policy",
@@ -44,6 +43,30 @@ describe("API adapter routing", () => {
         base: "https://u:p@dashscope.aliyuncs.com",
       }),
     ).rejects.toThrow();
+  });
+  it("routes custom ASR and TTS bases independently and keeps raw TTS auth", async () => {
+    const fetch = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetch);
+    await dispatch({ action: "tts-check", key: "tts", base: "invalid-asr", ttsBase: "https://voice.example:8443/team" });
+    expect(fetch.mock.calls[0][0]).toBe("https://voice.example:8443/team/api/v1/comfyui/workflows/indextts2-v1");
+    expect(fetch.mock.calls[0][1].headers.Authorization).toBe("tts");
+    await dispatch({ action: "asr-policy", key: "asr", base: "https://asr.example/team" });
+    expect(fetch.mock.calls[1][0]).toContain("https://asr.example/team/api/v1/uploads?");
+  });
+  it("downloads arbitrary public result hosts without API credentials", async () => {
+    const fetch = vi.fn(async () => new Response("audio"));
+    vi.stubGlobal("fetch", fetch);
+    await dispatch({ action: "download", url: "https://media.example/take.wav?ak=keep-me" });
+    expect(String(fetch.mock.calls[0][0])).toBe("https://media.example/take.wav?ak=keep-me");
+    expect(fetch.mock.calls[0][1].headers).toBeUndefined();
+    expect(fetch.mock.calls[0][1].redirect).toBe("error");
+  });
+  it("rejects literal local networks and credentials before fetching", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    for (const base of ["https://10.0.0.1/v1", "https://localhost/v1", "https://[::1]/v1", "https://169.254.169.254/", "https://user:pass@api.example/v1"])
+      await expect(dispatch({ action: "ai-models", key: "k", aiBase: base })).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
   });
   it("forwards AI model selection and non-streaming output", async () => {
     const fetch = vi.fn(async () => new Response("{}"));

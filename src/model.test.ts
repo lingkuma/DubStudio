@@ -8,6 +8,10 @@ import {
   srt,
   parseSrt,
   dubPlacement,
+  needsGeneration,
+  removeVoice,
+  referenceKey,
+  canResumeGeneration,
 } from "./model";
 import { parseAI } from "./ai";
 function fixture() {
@@ -26,6 +30,7 @@ function fixture() {
 describe("source / timeline mapping", () => {
   it("maps source times after trimming and moving", () => {
     const p = fixture();
+    expect(p.segments[0].voiceId).toBe("");
     expect(placement(p, p.segments[0])).toMatchObject({
       start: 12,
       end: 17,
@@ -37,6 +42,60 @@ describe("source / timeline mapping", () => {
       end: 13,
       cut: 2,
     });
+  });
+  it("defaults transcript lines to their original audio and marks changed source ranges stale", () => {
+    const p = fixture(),
+      s = p.segments[0];
+    s.takeId = "t";
+    s.takes = [
+      {
+        id: "t",
+        assetId: "take",
+        text: s.text,
+        voiceId: "",
+        referenceKey: referenceKey(p, s),
+        created: 0,
+        duration: 5,
+      },
+    ];
+    expect(needsGeneration(p, s)).toBe(false);
+    p.videos[0].start += 10;
+    expect(needsGeneration(p, s)).toBe(false);
+    s.sourceEnd -= 0.25;
+    expect(needsGeneration(p, s)).toBe(true);
+  });
+  it("deleting a custom voice returns linked sentences to the original source", () => {
+    const p = fixture(),
+      s = p.segments[0];
+    p.voices.push({
+      id: "voice",
+      name: "自定义",
+      assetId: "audio",
+      method: "与音色参考音频相同",
+      emotions: {},
+      random: false,
+    });
+    s.voiceId = "voice";
+    removeVoice(p, "voice");
+    expect(s.voiceId).toBe("");
+    expect(p.voices).toHaveLength(0);
+  });
+  it("only resumes a cloud job while the sentence's submitted settings still match", () => {
+    const p = fixture(),
+      s = p.segments[0];
+    s.taskId = "submitted";
+    s.jobText = s.text;
+    s.jobVoiceId = "";
+    s.jobReferenceKey = referenceKey(p, s);
+    expect(canResumeGeneration(p, s)).toBe(true);
+    s.sourceStart += 0.1;
+    expect(canResumeGeneration(p, s)).toBe(false);
+    s.sourceStart -= 0.1;
+    s.voiceId = "custom";
+    expect(canResumeGeneration(p, s)).toBe(false);
+    s.voiceId = "";
+    s.text += "已修改";
+    expect(canResumeGeneration(p, s)).toBe(false);
   });
   it("splits crossing sentences while preserving audio source offsets", () => {
     const p = fixture();

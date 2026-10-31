@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import {
   blankProject,
-  defaults,
+  restoreSettings,
   duration,
   type Project,
   type Settings,
@@ -35,7 +35,7 @@ try {
 } catch {}
 export const useStudio = create<State>((set, get) => ({
   project: blankProject(),
-  settings: { ...defaults, ...saved },
+  settings: restoreSettings(saved),
   selected: null,
   time: 0,
   playing: false,

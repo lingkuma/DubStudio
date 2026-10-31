@@ -6,21 +6,26 @@ import {
   Maximize,
   Volume2,
   LoaderCircle,
+  Upload,
 } from "lucide-react";
 import { useStudio } from "./store";
 import { duration, timecode, type Project } from "./model";
 import { mediaUrl } from "./storage";
 import { audioContext, mixAudio, paintSubtitles } from "./media";
-import { report } from "./actions";
+import { addVideo, report } from "./actions";
 export default function Preview() {
-  const { project: p, time, playing, set } = useStudio(),
+  const { project: p, time, playing, busy, set } = useStudio(),
     canvas = useRef<HTMLCanvasElement>(null),
     players = useRef(new Map<string, HTMLVideoElement>()),
     mix = useRef<{ project: Project; audio: AudioBuffer } | null>(null),
     source = useRef<AudioBufferSourceNode | null>(null),
     clock = useRef({ origin: 0, offset: 0 }),
     loading = useRef(false),
-    [preparing, prepare] = useState(false);
+    [preparing, prepare] = useState(false),
+    [dragging, setDragging] = useState(false),
+    dragDepth = useRef(0);
+  const fileDrag = (e: React.DragEvent) =>
+    Array.from(e.dataTransfer.types).includes("Files");
   useEffect(() => {
     let stop = false;
     const ids = [...new Set(p.videos.map((v) => v.assetId))];
@@ -162,7 +167,37 @@ export default function Preview() {
           {p.width} × {p.height} · {p.fps} fps
         </span>
       </div>
-      <div className="stage">
+      <div className={"stage" + (dragging ? " dragging-video" : "")}
+        onDragEnter={(e) => {
+          if (!fileDrag(e)) return;
+          e.preventDefault();
+          dragDepth.current++;
+          setDragging(true);
+        }}
+        onDragOver={(e) => {
+          if (!fileDrag(e)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = busy ? "none" : "copy";
+        }}
+        onDragLeave={(e) => {
+          if (!fileDrag(e)) return;
+          e.preventDefault();
+          if (--dragDepth.current <= 0) {
+            dragDepth.current = 0;
+            setDragging(false);
+          }
+        }}
+        onDrop={(e) => {
+          if (!fileDrag(e)) return;
+          e.preventDefault();
+          dragDepth.current = 0;
+          setDragging(false);
+          if (busy) { report("请等待当前任务完成后再导入视频"); return; }
+          const files = Array.from(e.dataTransfer.files);
+          const videos = files.filter((file) => file.type.startsWith("video/") || /\.(mp4|mov|m4v|webm|mkv)$/i.test(file.name));
+          if (!videos.length) { report("请拖入视频文件，例如 MP4 或 MOV"); return; }
+          void addVideo(videos);
+        }}>
         <canvas
           ref={canvas}
           width={p.width}
@@ -181,7 +216,14 @@ export default function Preview() {
               <Play />
             </div>
             <h2>你的下一版，从一句话开始</h2>
-            <p>导入视频，识别台词，再赋予它新的声音。</p>
+            <p>将视频拖到这里，识别台词，再赋予它新的声音。</p>
+          </div>
+        )}
+        {dragging && (
+          <div className="stage-drop" role="status">
+            <Upload size={30} />
+            <strong>{busy ? "请等待当前任务完成" : "松开以导入视频"}</strong>
+            {!busy && <span>{p.videos.length ? "多个视频将依次追加到时间轴末尾" : "支持一次拖入多个视频"}</span>}
           </div>
         )}
       </div>

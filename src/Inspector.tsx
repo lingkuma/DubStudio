@@ -1,7 +1,22 @@
 import { useRef } from "react";
-import { Mic, Plus, Download, Music2, Volume2 } from "lucide-react";
+import {
+  Mic,
+  Plus,
+  Download,
+  Music2,
+  Volume2,
+  Trash2,
+  Check,
+} from "lucide-react";
 import { useStudio } from "./store";
-import { placement, takeFor, type Segment, type Voice } from "./model";
+import {
+  placement,
+  takeFor,
+  removeVoice,
+  type Segment,
+  type Voice,
+} from "./model";
+import VoiceSourceSelect from "./VoiceSourceSelect";
 import {
   addMusic,
   addVoice,
@@ -73,8 +88,38 @@ export default function Inspector({ tab }: { tab: "properties" | "voice" }) {
           </button>
         </div>
         <p className="help">
-          选择清晰、干净的短音频。IndexTTS2 每次生成都会使用这段声音。
+          默认从每句在原视频中的时间戳提取原声，作为音色与情绪参考。自定义音色仅在指定后使用。
         </p>
+        {s && (
+          <div className="voice-source-status">
+            <span>当前句音源</span>
+            <strong>
+              {s.voiceId
+                ? p.voices.find((v) => v.id === s.voiceId)?.name || "已删除音色"
+                : "原句原声"}
+            </strong>
+            {s.voiceId && (
+              <button onClick={() => patch({ voiceId: "" })}>
+                恢复原句原声
+              </button>
+            )}
+          </div>
+        )}
+        {!s && (
+          <p className="help">先在左侧选中一句，即可查看或指定它使用的音色。</p>
+        )}
+        <button
+          disabled={!!busy || !p.segments.some((row) => row.voiceId)}
+          onClick={() =>
+            edit((p) =>
+              p.segments.forEach((row) => {
+                row.voiceId = "";
+              }),
+            )
+          }
+        >
+          全部恢复原句原声
+        </button>
         {!p.voices.length && (
           <button className="upload-voice" onClick={() => ref.current?.click()}>
             <Mic size={22} />
@@ -83,13 +128,21 @@ export default function Inspector({ tab }: { tab: "properties" | "voice" }) {
           </button>
         )}
         {p.voices.map((v) => (
-          <section className="voice-item" key={v.id}>
+          <section
+            className={"voice-item" + (s?.voiceId === v.id ? " selected" : "")}
+            key={v.id}
+          >
             <input
               aria-label="音色名称"
               value={v.name}
               onChange={(e) => vp(v.id, { name: e.target.value })}
             />
             <div className="voice-actions">
+              {s?.voiceId === v.id && (
+                <span className="voice-selected">
+                  <Check size={13} /> 当前句使用
+                </span>
+              )}
               <button
                 onClick={async () => {
                   const a = new Audio(await mediaUrl(v.assetId));
@@ -110,7 +163,29 @@ export default function Inspector({ tab }: { tab: "properties" | "voice" }) {
               >
                 应用到全部句子
               </button>
+              {s && (
+                <button
+                  disabled={!!busy}
+                  aria-pressed={s.voiceId === v.id}
+                  onClick={() => patch({ voiceId: v.id })}
+                >
+                  用于当前句
+                </button>
+              )}
+              <button
+                className="danger"
+                disabled={!!busy}
+                title="删除音色"
+                aria-label={"删除音色 " + v.name}
+                onClick={() => edit((p) => removeVoice(p, v.id))}
+              >
+                <Trash2 size={14} /> 删除
+              </button>
             </div>
+            <p className="help">
+              {p.segments.filter((row) => row.voiceId === v.id).length}{" "}
+              句使用此音色
+            </p>
             <label>
               情绪控制
               <select
@@ -223,20 +298,12 @@ export default function Inspector({ tab }: { tab: "properties" | "voice" }) {
               }}
             />
           </label>
-          <label>
-            配音音色
-            <select
-              value={s.voiceId}
-              onChange={(e) => patch({ voiceId: e.target.value })}
-            >
-              <option value="">选择参考声音</option>
-              {p.voices.map((v) => (
-                <option value={v.id} key={v.id}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <VoiceSourceSelect
+            project={p}
+            segment={s}
+            disabled={!!busy}
+            onChange={(voiceId) => patch({ voiceId })}
+          />
           <label>
             配音时长
             <select

@@ -33,6 +33,8 @@ import {
   timecode,
   uid,
   splitVideo,
+  needsGeneration,
+  canResumeGeneration,
 } from "./model";
 import {
   addVideo,
@@ -54,6 +56,7 @@ import {
 import Preview from "./Preview";
 import EditorTimeline from "./Timeline";
 import Inspector from "./Inspector";
+import VoiceSourceSelect from "./VoiceSourceSelect";
 import AIPanel from "./AIPanel";
 import { ImportDialog, Modal, SettingsDialog } from "./Dialogs";
 export default function App() {
@@ -156,7 +159,7 @@ export default function App() {
         text: "",
         subtitle: "",
         syncText: true,
-        voiceId: p.voices[0]?.id || "",
+        voiceId: "",
         takes: [],
         status: "idle",
         dubOffset: 0,
@@ -364,8 +367,8 @@ export default function App() {
                 take = takeFor(s),
                 index = rows.findIndex((x) => x.id === s.id),
                 active = time >= at.start && time < at.end,
-                stale =
-                  take && (take.text !== s.text || take.voiceId !== s.voiceId);
+                stale = take && needsGeneration(p, s),
+                resumable = canResumeGeneration(p, s);
               return (
                 <article
                   key={s.id}
@@ -463,6 +466,17 @@ export default function App() {
                       )}
                     </>
                   )}
+                  <VoiceSourceSelect
+                    project={p}
+                    segment={s}
+                    disabled={!!busy}
+                    onChange={(voiceId) =>
+                      edit((p) => {
+                        p.segments.find((row) => row.id === s.id)!.voiceId =
+                          voiceId;
+                      })
+                    }
+                  />
                   <div className="segment-actions">
                     <span>
                       {s.text.length} 字 · {(at.end - at.start).toFixed(1)}s
@@ -484,11 +498,17 @@ export default function App() {
                       disabled={!!busy}
                       onClick={(e) => {
                         e.stopPropagation();
-                        void generate([s.id], !!s.taskId);
+                        void generate([s.id], resumable);
                       }}
                     >
                       <Mic size={12} />
-                      {s.taskId ? "继续查询" : take ? "重新生成" : "克隆"}
+                      {resumable
+                        ? "继续查询"
+                        : s.taskId
+                          ? "按配置生成"
+                          : take
+                            ? "重新生成"
+                            : "克隆"}
                     </button>
                   </div>
                   {s.error && <p className="error-text">{s.error}</p>}
@@ -505,13 +525,7 @@ export default function App() {
               onClick={() =>
                 generate(
                   rows
-                    .filter(
-                      (s) =>
-                        !s.muted &&
-                        (!takeFor(s) ||
-                          takeFor(s)!.text !== s.text ||
-                          takeFor(s)!.voiceId !== s.voiceId),
-                    )
+                    .filter((s) => !s.muted && needsGeneration(p, s))
                     .map((s) => s.id),
                 )
               }

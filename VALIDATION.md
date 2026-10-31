@@ -1,5 +1,16 @@
 # Validation record
 
+## Sentence reference selection (2026-10-31)
+
+- New ASR, manual and SRT sentences default to their own original source audio. Uploading/extracting a library voice no longer assigns it automatically; existing saved selections are preserved.
+- Browser checks exercised per-sentence selection, the current-voice marker, deletion back to original audio, undo, and uploading another reference without changing sentence sources.
+- The existing real video yielded a mono 24kHz WAV of 4.080 seconds for source timestamps 3.57–7.65 seconds. The temporary reference is sent in the request without adding a project asset or library voice.
+- Using mocked TTS responses in Ego Browser, the actual batch button submitted a 4.080-second original reference for one sentence and the selected 10.101-second custom reference for another. Changing a sentence source marked its take stale; single regeneration submitted the changed reference. No new paid TTS call or subjective voice-quality claim was made in this pass.
+- Regression tests cover source-time extraction routing, empty voice libraries, mixed references, source/configuration staleness, upload defaults, original/custom task recovery, and extraction errors. Production build and tests were run after the change.
+- DOM width checks found no document overflow at the tested desktop viewport and 390px mobile width. Screenshot capture was unavailable because Ego's window was minimized; this pass does not claim visual screenshot QA.
+
+## Earlier end-to-end validation
+
 Validated locally with the owner-supplied 182.958333-second, 858×480 H.264/AAC MP4 and 10.135510-second MP3 voice reference. No credentials or signed result URLs are included in this document.
 
 | Requirement | Current evidence |

@@ -1,21 +1,37 @@
-import type { Settings, Voice } from "./model";
+import type { Channel, Settings, Voice } from "./model";
 import { getMedia } from "./storage";
 const MODEL = "qwen-audio-3.1-asr-flash-filetrans";
+export function workerTarget(template: string, target: string) {
+  if (!template.trim()) throw new Error("请填写此渠道的 Worker 代理地址");
+  if (template.includes("{rawUrl}")) return template.replaceAll("{rawUrl}", target);
+  if (template.includes("{url}")) return template.replaceAll("{url}", encodeURIComponent(target));
+  const url = new URL(template);
+  url.searchParams.set("url", target);
+  return url.href;
+}
+function upstreamUrl(s: Settings, channel: Channel, url: string) {
+  const c = s.connections[channel];
+  return c.transport === "worker" ? workerTarget(c.workerUrl, url) : url;
+}
 export async function api(
   s: Settings,
   action: string,
   extra: Record<string, unknown> = {},
   signal?: AbortSignal,
 ): Promise<any> {
+  const channel: Channel = action.startsWith("tts") ? "tts" : action.startsWith("ai") ? "ai" : "asr";
+  const connection = s.connections[channel];
   const key = action.startsWith("tts")
     ? s.autodlKey
     : action.startsWith("ai")
       ? s.aiKey
       : s.aliyunKey;
-  const body = { action, key, base: s.asrBase, aiBase: s.aiBase, ...extra };
+  const asrBase = s.asrBase.replace(/\/+$/, "");
+  const ttsBase = s.autodlBase.replace(/\/+$/, "");
+  const body = { action, key, base: asrBase, ttsBase, aiBase: s.aiBase, ...extra };
   let r: Response;
-  if (s.transport === "gateway")
-    r = await fetch(s.gateway, {
+  if (connection.transport === "gateway")
+    r = await fetch(connection.gateway, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -31,10 +47,10 @@ export async function api(
     const p = extra.payload as any;
     switch (action) {
       case "asr-policy":
-        url = s.asrBase + "/api/v1/uploads?action=getPolicy&model=" + MODEL;
+        url = asrBase + "/api/v1/uploads?action=getPolicy&model=" + MODEL;
         break;
       case "asr-submit":
-        url = s.asrBase + "/api/v1/services/audio/asr/transcription";
+        url = asrBase + "/api/v1/services/audio/asr/transcription";
         method = "POST";
         headers["X-DashScope-Async"] = "enable";
         headers["X-DashScope-OssResourceResolve"] = "enable";
@@ -50,21 +66,21 @@ export async function api(
         break;
       case "asr-result":
         url =
-          s.asrBase +
+          asrBase +
           "/api/v1/tasks/" +
           encodeURIComponent(String(extra.taskId));
         break;
       case "tts-submit":
-        url = "https://autodl.art/api/v1/comfyui/comfyui_workflow/indextts2-v1";
+        url = ttsBase + "/api/v1/comfyui/comfyui_workflow/indextts2-v1";
         method = "POST";
         data = p;
         break;
       case "tts-check":
-        url = "https://autodl.art/api/v1/comfyui/workflows/indextts2-v1";
+        url = ttsBase + "/api/v1/comfyui/workflows/indextts2-v1";
         break;
       case "tts-result":
         url =
-          "https://autodl.art/api/v1/comfyui/comfyui_workflow/result/" +
+          ttsBase + "/api/v1/comfyui/comfyui_workflow/result/" +
           encodeURIComponent(String(extra.taskId));
         break;
       case "ai-chat":
@@ -79,7 +95,7 @@ export async function api(
         throw new Error("未知 API 操作");
     }
     if (data) headers["Content-Type"] = "application/json";
-    r = await fetch(url, {
+    r = await fetch(upstreamUrl(s, channel, url), {
       method,
       headers,
       body: data ? JSON.stringify(data) : undefined,
@@ -106,21 +122,27 @@ export async function remoteBlob(
   s: Settings,
   url: string,
   signal?: AbortSignal,
+  channel: Channel = "asr",
 ) {
+  const connection = s.connections[channel];
   let r: Response;
   try {
     r = await fetch(url, { signal });
     if (!r.ok) throw new Error("download");
   } catch (e) {
     if (signal?.aborted) throw e;
-    if (s.transport === "direct")
-      throw new Error("结果下载被跨域限制，请切换同站代理模式");
-    r = await fetch(s.gateway, {
+    if (connection.transport === "worker") {
+      r = await fetch(upstreamUrl(s, channel, url), { signal });
+    } else {
+      if (connection.transport === "direct" && !connection.downloadFallback)
+        throw new Error("结果下载被跨域限制，请配置此渠道的结果下载代理");
+      r = await fetch(connection.gateway, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "download", url }),
       signal,
     });
+    }
   }
   if (!r.ok) throw new Error("结果下载失败：HTTP " + r.status);
   return r.blob();
@@ -164,7 +186,10 @@ export async function transcribe(
     form.append(k, String(v));
   form.append("file", blob, "audio.wav");
   onStatus("上传音频到百炼临时存储");
-  const upload = await fetch(policy.upload_host, {
+  const uploadUrl = s.connections.asr.transport === "worker"
+    ? upstreamUrl(s, "asr", policy.upload_host)
+    : policy.upload_host;
+  const upload = await fetch(uploadUrl, {
     method: "POST",
     body: form,
     signal,
@@ -222,11 +247,12 @@ export async function submitTts(
   voice: Voice,
   s: Settings,
   signal?: AbortSignal,
+  referenceOverride?: Blob,
 ) {
   if (!s.autodlKey) throw new Error("请在 API 设置中填写 AutoDL Token");
   if (!text.trim()) throw new Error("配音文本不能为空");
   if (text.length > 2048) throw new Error("单句文本不能超过 2048 字符");
-  const ref = await getMedia(voice.assetId);
+  const ref = referenceOverride || await getMedia(voice.assetId);
   if (ref.size > 2_000_000)
     throw new Error("参考音频过大，请选用小于 2MB 的短音频");
   const payload: Record<string, unknown> = {
@@ -257,7 +283,7 @@ export async function pollTts(
     if (["SUCCESS", "COMPLETED", "SUCCEEDED"].includes(status)) {
       const url = d.data.results?.find((x: any) => x.type === "audio")?.url;
       if (!url) throw new Error("生成任务缺少音频结果");
-      return remoteBlob(s, url, signal);
+      return remoteBlob(s, url, signal, "tts");
     }
     if (["FAILED", "FAILURE", "ERROR", "CANCELLED"].includes(status))
       throw new Error(d.msg || d.data.message || "配音生成失败");

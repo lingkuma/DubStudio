@@ -22,6 +22,7 @@ export type Take = {
   assetId: string;
   text: string;
   voiceId: string;
+  referenceKey?: string;
   created: number;
   duration: number;
 };
@@ -42,6 +43,7 @@ export type Segment = {
   taskId?: string;
   jobText?: string;
   jobVoiceId?: string;
+  jobReferenceKey?: string;
   dubOffset: number;
   subtitleOffset: number;
   gain: number;
@@ -111,12 +113,19 @@ export type Project = {
   created: number;
   updated: number;
 };
+export type Channel = "asr" | "tts" | "ai";
+export type Connection = {
+  transport: "gateway" | "direct" | "worker";
+  gateway: string;
+  workerUrl: string;
+  downloadFallback: boolean;
+};
 export type Settings = {
   aliyunKey: string;
   autodlKey: string;
   asrBase: string;
-  transport: "gateway" | "direct";
-  gateway: string;
+  autodlBase: string;
+  connections: Record<Channel, Connection>;
   remember: boolean;
   diarization: boolean;
   hotwords: string;
@@ -128,8 +137,12 @@ export const defaults: Settings = {
   aliyunKey: "",
   autodlKey: "",
   asrBase: "https://dashscope.aliyuncs.com",
-  transport: "gateway",
-  gateway: "/api/gateway",
+  autodlBase: "https://autodl.art",
+  connections: {
+    asr: { transport: "gateway", gateway: "/api/gateway", workerUrl: "", downloadFallback: true },
+    tts: { transport: "direct", gateway: "/api/gateway", workerUrl: "", downloadFallback: true },
+    ai: { transport: "gateway", gateway: "/api/gateway", workerUrl: "", downloadFallback: true },
+  },
   remember: false,
   diarization: false,
   hotwords: "",
@@ -137,6 +150,22 @@ export const defaults: Settings = {
   aiKey: "",
   aiModel: "gemini-4-argon",
 };
+export function restoreSettings(saved: unknown): Settings {
+  const old = saved && typeof saved === "object"
+    ? saved as Partial<Settings> & { transport?: "direct" | "gateway"; gateway?: string }
+    : {};
+  const { transport, gateway, connections, ...rest } = old;
+  const migrated = { ...defaults, ...rest, connections: {} as Settings["connections"] };
+  for (const channel of ["asr", "tts", "ai"] as const) {
+    migrated.connections[channel] = {
+      ...defaults.connections[channel],
+      ...(transport && channel !== "tts" ? { transport } : {}),
+      ...(gateway ? { gateway } : {}),
+      ...connections?.[channel],
+    };
+  }
+  return migrated;
+}
 export const uid = () => crypto.randomUUID();
 export const blankProject = (): Project => ({
   version: 1,
@@ -170,6 +199,39 @@ export const duration = (p: Project) =>
     ...p.music.map((c) => c.start + c.out - c.in),
   );
 export const takeFor = (s: Segment) => s.takes.find((t) => t.id === s.takeId);
+// Empty voiceId means the original audio at this sentence's source timestamps.
+export function referenceKey(p: Project, s: Segment) {
+  if (!s.voiceId)
+    return JSON.stringify([
+      "original",
+      p.videos.find((v) => v.id === s.clipId)?.assetId,
+      s.sourceStart,
+      s.sourceEnd,
+    ]);
+  const v = p.voices.find((v) => v.id === s.voiceId);
+  return JSON.stringify([
+    "voice", s.voiceId, v?.assetId, v?.method, v?.random,
+    v?.emotionAssetId,
+    Object.entries(v?.emotions || {}).sort(([a], [b]) => a.localeCompare(b)),
+  ]);
+}
+export function needsGeneration(p: Project, s: Segment) {
+  const take = takeFor(s);
+  return !take || take.text !== s.text ||
+    (take.voiceId || "") !== (s.voiceId || "") ||
+    (take.referenceKey !== undefined && take.referenceKey !== referenceKey(p, s));
+}
+export function canResumeGeneration(p: Project, s: Segment) {
+  return !!s.taskId &&
+    (s.jobText ?? s.text) === s.text &&
+    (s.jobVoiceId ?? s.voiceId ?? "") === (s.voiceId || "") &&
+    (s.jobReferenceKey === undefined || s.jobReferenceKey === referenceKey(p, s));
+}
+export function removeVoice(p: Project, id: string) {
+  p.voices = p.voices.filter((v) => v.id !== id);
+  for (const s of p.segments) if (s.voiceId === id) s.voiceId = "";
+  // Keep media for undo and any other clips or takes sharing the asset.
+}
 export function dubPlacement(p: Project, s: Segment) {
   const at = placement(p, s),
     take = takeFor(s),

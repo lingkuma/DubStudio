@@ -1,18 +1,34 @@
+import { isIP } from "node:net";
 const MODEL = "qwen-audio-3.1-asr-flash-filetrans";
+function publicAddress(address) {
+  const ip = address.toLowerCase();
+  if (isIP(ip) === 4) {
+    const [a, b] = ip.split(".").map(Number);
+    return !(a === 0 || a === 10 || a === 127 || a >= 224 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19)));
+  }
+  // Only global-unicast IPv6; this also rejects mapped IPv4 and local addresses.
+  return isIP(ip) === 6 && /^[23]/.test(ip) && !ip.startsWith("2001:db8:");
+}
+async function publicUrl(value) {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password)
+    throw new Error("代理地址须为 HTTPS，不能在 URL 中包含用户名或密码");
+  const host = parsed.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local"))
+    throw new Error("代理目标不能是本机或内网地址");
+  // Basic URL guard only; this is not caller authentication or DNS isolation.
+  // Keep normal proxy/VPN DNS setups working when they use synthetic addresses.
+  if (isIP(host) && !publicAddress(host))
+    throw new Error("代理目标不能是本机或内网地址");
+  return parsed;
+}
 export async function dispatch(body) {
   const { action, key, taskId, payload, url } = body;
   if (action === "download") {
-    const parsed = new URL(url);
-    if (
-      parsed.protocol !== "https:" ||
-      parsed.username ||
-      parsed.password ||
-      parsed.port ||
-      !/(^|\.)(aliyuncs\.com|myqcloud\.com|autodl\.art|volces\.com)$/.test(
-        parsed.hostname,
-      )
-    )
-      throw new Error("仅支持阿里云和 AutoDL 结果地址");
+    const parsed = await publicUrl(url);
     return fetch(parsed, {
       signal: AbortSignal.timeout(50000),
       redirect: "error",
@@ -21,17 +37,7 @@ export async function dispatch(body) {
   if (!key || typeof key !== "string" || key.length > 2000)
     throw new Error("请先在设置中填写 API Key");
   if (action === "ai-chat" || action === "ai-models") {
-    const ai = new URL(body.aiBase || "https://api.0-0.pro/v1");
-    if (
-      ai.protocol !== "https:" ||
-      ai.username ||
-      ai.port ||
-      ai.password ||
-      !/(^|\.)(0-0\.pro|openai\.com)$/.test(ai.hostname)
-    )
-      throw new Error(
-        "同站代理支持 0-0.pro / OpenAI 官方域名，其他中转请使用直连或自己的代理",
-      );
+    const ai = await publicUrl(body.aiBase || "https://api.0-0.pro/v1");
     return fetch(
       ai.href.replace(/\/$/, "") +
         (action === "ai-chat" ? "/chat/completions" : "/models"),
@@ -43,22 +49,15 @@ export async function dispatch(body) {
         },
         body: action === "ai-chat" ? JSON.stringify(payload) : undefined,
         signal: AbortSignal.timeout(50000),
+        redirect: "error",
       },
     );
   }
-  let base = (body.base || "https://dashscope.aliyuncs.com").replace(/\/$/, "");
-  const host = new URL(base);
-  if (
-    host.protocol !== "https:" ||
-    host.username ||
-    host.password ||
-    host.port ||
-    !/(^|\.)(dashscope\.aliyuncs\.com|dashscope-intl\.aliyuncs\.com|maas\.aliyuncs\.com)$/.test(
-      host.hostname,
-    ) ||
-    host.pathname !== "/"
-  )
-    throw new Error("百炼地址必须为官方 HTTPS 域名");
+  const isTts = action.startsWith("tts-");
+  const host = await publicUrl(isTts
+    ? body.ttsBase || "https://autodl.art"
+    : body.base || "https://dashscope.aliyuncs.com");
+  const base = host.href.replace(/\/+$/, "");
   const headers = {
     Authorization: `Bearer ${key}`,
     "Content-Type": "application/json",
@@ -89,18 +88,17 @@ export async function dispatch(body) {
       target = `${base}/api/v1/tasks/${encodeURIComponent(taskId)}`;
       break;
     case "tts-submit":
-      target =
-        "https://autodl.art/api/v1/comfyui/comfyui_workflow/indextts2-v1";
+      target = `${base}/api/v1/comfyui/comfyui_workflow/indextts2-v1`;
       method = "POST";
       headers.Authorization = key;
       data = payload;
       break;
     case "tts-result":
-      target = `https://autodl.art/api/v1/comfyui/comfyui_workflow/result/${encodeURIComponent(taskId)}`;
+      target = `${base}/api/v1/comfyui/comfyui_workflow/result/${encodeURIComponent(taskId)}`;
       headers.Authorization = key;
       break;
     case "tts-check":
-      target = "https://autodl.art/api/v1/comfyui/workflows/indextts2-v1";
+      target = `${base}/api/v1/comfyui/workflows/indextts2-v1`;
       headers.Authorization = key;
       break;
     default:
@@ -111,6 +109,7 @@ export async function dispatch(body) {
     headers,
     body: data ? JSON.stringify(data) : undefined,
     signal: AbortSignal.timeout(50000),
+    redirect: "error",
   });
 }
 export default async function handler(req, res) {
