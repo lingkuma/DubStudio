@@ -18,6 +18,7 @@ import {
   type Project,
 } from "./model";
 import { getMedia, putMedia } from "./storage";
+import { selectExportEncoding } from "./exportEncoding";
 let ctx: AudioContext | undefined;
 export function audioContext() {
   return (ctx ??= new AudioContext({ sampleRate: 48000 }));
@@ -362,21 +363,12 @@ export async function renderVideo(
   signal?: AbortSignal,
 ) {
   if (!p.videos.length) throw new Error("请先导入视频");
-  if (!("VideoEncoder" in window))
-    throw new Error("当前浏览器不支持视频导出，请使用最新版 Chrome / Edge");
-  if (
-    !(await Combinator.isSupported({
-      width: p.width,
-      height: p.height,
-      bitrate: 4e6,
-    }))
-  )
-    throw new Error("设备不支持当前 H.264 编码参数，请尝试降低分辨率");
+  const encoding = await selectExportEncoding(p.width, p.height, p.fps);
   const com = new Combinator({
       width: p.width,
       height: p.height,
       fps: p.fps,
-      bitrate: 4e6,
+      ...encoding,
       bgColor: "#000000",
     }),
     owned: IClip[] = [];

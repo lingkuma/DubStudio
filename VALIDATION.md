@@ -1,5 +1,12 @@
 # Validation record
 
+## H.264 export compatibility (2026-10-31)
+
+- Replaced the single WebAV boolean preflight with independent secure-context, required-API, AAC and H.264 checks. The previous H.264 message also covered missing browser APIs and AAC failures, so a resolution problem was not established by that message.
+- Probes now include the actual frame rate, 4Mbps bitrate, AVC MP4 format and encoder preference used for output. H.264 profile/level alternatives and a software preference are tried without changing project dimensions or frame rate; the selected options are passed to WebAV.
+- The existing local 1080×1920, 24fps project passed the old preflight in Ego Browser; the user's original failure was not reproduced. To verify fallback, browser QA deliberately rejected baseline-profile probes and then exported two seconds of the real source with Main profile at the same 1080×1920 and 24fps. This produced a 731,260-byte MP4 with H.264 video and AAC audio. Full ffmpeg `-xerror` decode passed.
+- All 73 regression tests pass and the production build succeeds. Added coverage includes profile rejection/exception, software preference, level limits, frame rate, missing browser APIs, AAC failures and exhausted video alternatives. No cloud generation calls were made.
+
 ## Sentence reference selection (2026-10-31)
 
 - New ASR, manual and SRT sentences default to their own original source audio. Uploading/extracting a library voice no longer assigns it automatically; existing saved selections are preserved.
