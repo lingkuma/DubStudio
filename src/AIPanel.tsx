@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Sparkles,
   Send,
@@ -7,6 +7,7 @@ import {
   FileInput,
   Play,
   LoaderCircle,
+  BookOpen,
 } from "lucide-react";
 import { useStudio } from "./store";
 import {
@@ -21,6 +22,14 @@ import {
   type Project,
 } from "./model";
 import { askAI, type AIResult } from "./ai";
+import {
+  emptyKnowledge,
+  knowledgePayload,
+  loadKnowledge,
+  saveKnowledge,
+  type KnowledgeState,
+} from "./knowledge";
+import { KnowledgeDialog } from "./Dialogs";
 import { exportVideo, generate, report, task } from "./actions";
 export default function AIPanel({
   seed = "",
@@ -31,7 +40,42 @@ export default function AIPanel({
 }) {
   const { project: p, settings, selected, busy, edit, set } = useStudio(),
     [input, setInput] = useState(""),
-    [sending, sendState] = useState(false);
+    [sending, sendState] = useState(false),
+    [knowledge, knowledgeSet] = useState<KnowledgeState>(emptyKnowledge),
+    [knowledgeError, knowledgeErrorSet] = useState(""),
+    [dialogue, dialogueSet] = useState(false);
+  const latestKnowledge = useRef(knowledge),
+    saveTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    void loadKnowledge().then((saved) => {
+      if (alive) knowledgeSet(saved);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  useEffect(() => {
+    latestKnowledge.current = knowledge;
+  }, [knowledge]);
+  useEffect(
+    () => () => {
+      if (saveTimer.current === undefined) return;
+      window.clearTimeout(saveTimer.current);
+      void saveKnowledge(latestKnowledge.current);
+    },
+    [],
+  );
+  const changeKnowledge = (next: KnowledgeState) => {
+    knowledgeSet(next);
+    latestKnowledge.current = next;
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = undefined;
+      void saveKnowledge(next).then(knowledgeErrorSet);
+    }, 350);
+  };
+  const activeKnowledge = knowledge.files.filter((f) => f.active).length;
   const draft = p.proposal;
   const people = speakerContext(p);
   const setDraft = (value: Project["proposal"] | null) =>
@@ -67,6 +111,7 @@ export default function AIPanel({
           settings,
           prompt + (selected ? " 当前选中句子或片段 ID：" + selected : ""),
           signal,
+          knowledgePayload(latestKnowledge.current),
         ),
       );
       if (!res) return;
@@ -164,7 +209,26 @@ export default function AIPanel({
           {people.unassignedLineCount > 0 &&
             ` · ${people.unassignedLineCount} 句未分配`}
         </span>
+        <button
+          className={
+            "text-button knowledge-toggle" +
+            (activeKnowledge || knowledge.prompt.trim() ? " active-toggle" : "")
+          }
+          title="上传知识库文件，编辑系统提示词大纲"
+          onClick={() => dialogueSet(true)}
+        >
+          <BookOpen size={13} />
+          知识库 {activeKnowledge}/{knowledge.files.length}
+        </button>
       </div>
+      {dialogue && (
+        <KnowledgeDialog
+          value={knowledge}
+          error={knowledgeError}
+          onChange={changeKnowledge}
+          close={() => dialogueSet(false)}
+        />
+      )}
       <div className="chat-messages">
         {!p.messages.length && (
           <div className="ai-welcome">

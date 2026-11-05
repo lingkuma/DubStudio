@@ -1,10 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Check, Copy, FileInput, Sparkles } from "lucide-react";
+import { X, Check, Copy, FileInput, Sparkles, BookOpen, FileText, Trash2, Upload } from "lucide-react";
 import { useStudio } from "./store";
 import { activeSegments, parseSrt, type Channel, type Connection, type Segment, uid } from "./model";
 import { api } from "./providers";
 import { report } from "./actions";
 import { settingsShareUrl } from "./settings";
+import {
+  knowledgeAccept,
+  knowledgeExtensions,
+  readKnowledgeFile,
+  type KnowledgeFile,
+  type KnowledgeState,
+} from "./knowledge";
 export function Modal({
   title,
   close,
@@ -303,6 +310,179 @@ export function SettingsDialog({ close }: { close: () => void }) {
       <footer>
         <button onClick={share}><Copy size={15} />复制配置分享链接</button>
         <button className="primary" onClick={close}>完成</button>
+      </footer>
+    </Modal>
+  );
+}
+export function KnowledgeDialog({
+  value,
+  error,
+  onChange,
+  close,
+}: {
+  value: KnowledgeState;
+  error: string;
+  onChange: (next: KnowledgeState) => void;
+  close: () => void;
+}) {
+  const [open, openSet] = useState<string | null>(null),
+    [status, statusSet] = useState(""),
+    [uploading, uploadingSet] = useState(false);
+  const active = value.files.filter((f) => f.active).length;
+  // Uploads resolve asynchronously; always patch the newest state.
+  const latest = useRef(value);
+  latest.current = value;
+  const patch = (fn: (draft: KnowledgeState) => void) => {
+    const next: KnowledgeState = {
+      files: latest.current.files.map((f) => ({ ...f })),
+      prompt: latest.current.prompt,
+    };
+    fn(next);
+    onChange(next);
+  };
+  const edit = (id: string, fn: (file: KnowledgeFile) => void) =>
+    patch((draft) => {
+      const file = draft.files.find((f) => f.id === id);
+      if (file) fn(file);
+    });
+  const upload = async (list: File[]) => {
+    if (!list.length) return;
+    uploadingSet(true);
+    statusSet("");
+    const added: KnowledgeFile[] = [],
+      failed: string[] = [];
+    for (const file of list) {
+      try {
+        added.push(await readKnowledgeFile(file));
+      } catch (e) {
+        failed.push(e instanceof Error ? e.message : String(e));
+      }
+    }
+    if (added.length) patch((draft) => draft.files.push(...added));
+    statusSet(failed.length ? failed.join("；") : `已添加 ${added.length} 个文件`);
+    uploadingSet(false);
+  };
+  return (
+    <Modal title="AI 知识库与系统大纲" close={close} wide>
+      <div className="knowledge-dialog">
+        <section>
+          <h3>
+            <BookOpen size={17} />
+            系统提示词 · 大纲
+          </h3>
+          <p className="help">
+            这段文字会作为固定 system 消息一起发送，用来规定知识库的作用、人物口径和改写尺度。与启用的文件一样，只保存在当前浏览器。
+          </p>
+          <textarea
+            aria-label="AI 系统提示词"
+            rows={6}
+            value={value.prompt}
+            placeholder={"例如：\n以《示例设定集》为准，人名与人物关系不可改动\n术语按设定集对照表统一，不得自创\n二创改写保持每句时长，优先沿用原有梗"}
+            onChange={(e) => patch((draft) => void (draft.prompt = e.target.value))}
+          />
+        </section>
+        <section>
+          <h3>
+            <FileInput size={17} />
+            知识库文件
+          </h3>
+          <div className="knowledge-actions">
+            <label className={"upload-button" + (uploading ? " disabled" : "")}>
+              <Upload size={14} />
+              {uploading ? "正在读取…" : "上传文本文件"}
+              <input
+                type="file"
+                multiple
+                accept={knowledgeAccept}
+                disabled={uploading}
+                onChange={(e) => {
+                  // Snapshot before clearing: FileList is live and empties with the input.
+                  const files = Array.from(e.target.files || []);
+                  e.target.value = "";
+                  void upload(files);
+                }}
+              />
+            </label>
+            <button
+              className="text-button"
+              disabled={!value.files.length}
+              onClick={() => patch((draft) => draft.files.forEach((f) => void (f.active = true)))}
+            >
+              全部启用
+            </button>
+            <button
+              className="text-button"
+              disabled={!value.files.length}
+              onClick={() => patch((draft) => draft.files.forEach((f) => void (f.active = false)))}
+            >
+              全部停用
+            </button>
+            <span className="meta">{active}/{value.files.length} 启用 · 仅存本机</span>
+          </div>
+          {(status || error) && (
+            <p className="connection-status" role="status">
+              {status || error}
+            </p>
+          )}
+          {!value.files.length ? (
+            <p className="help">
+              还没有文件。支持 {knowledgeExtensions.join(" / ")}；单个文件建议 20 万字以内，超出部分发送时会被截断。
+            </p>
+          ) : (
+            <div className="knowledge-list">
+              {value.files.map((f) => (
+                <div className="knowledge-item" key={f.id}>
+                  <div className="knowledge-row">
+                    <label className="check" title="默认附带在每次对话中">
+                      <input
+                        type="checkbox"
+                        checked={f.active}
+                        onChange={(e) =>
+                          edit(f.id, (file) => void (file.active = e.target.checked))
+                        }
+                      />
+                      默认激活
+                    </label>
+                    <button
+                      className="text-button knowledge-name"
+                      title="查看或修改内容"
+                      onClick={() => openSet(open === f.id ? null : f.id)}
+                    >
+                      <FileText size={13} />
+                      {f.name}
+                    </button>
+                    <span className="meta">{[...f.text].length} 字</span>
+                    <button
+                      className="icon"
+                      title={"删除 " + f.name}
+                      onClick={() =>
+                        patch((draft) => void (draft.files = draft.files.filter((x) => x.id !== f.id)))
+                      }
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                  {open === f.id && (
+                    <textarea
+                      aria-label={f.name + " 内容"}
+                      rows={10}
+                      value={f.text}
+                      onChange={(e) =>
+                        edit(f.id, (file) => void (file.text = e.target.value))
+                      }
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+      <footer>
+        <button className="primary" onClick={close}>
+          <Check size={15} />
+          完成
+        </button>
       </footer>
     </Modal>
   );
