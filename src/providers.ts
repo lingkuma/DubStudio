@@ -248,6 +248,7 @@ export async function submitTts(
   s: Settings,
   signal?: AbortSignal,
   referenceOverride?: Blob,
+  emotionOverride?: Blob,
 ) {
   if (!s.autodlKey) throw new Error("请在 API 设置中填写 AutoDL Token");
   if (!text.trim()) throw new Error("配音文本不能为空");
@@ -263,8 +264,13 @@ export async function submitTts(
     ...voice.emotions,
   };
   if (voice.method === "使用情感参考音频") {
-    if (!voice.emotionAssetId) throw new Error("请上传情感参考音频");
-    payload.emo_ref_audio = await dataUrl(await getMedia(voice.emotionAssetId));
+    const emotion = emotionOverride || (voice.emotionAssetId
+      ? await getMedia(voice.emotionAssetId)
+      : undefined);
+    if (!emotion) throw new Error("请上传情感参考音频");
+    if (emotion.size > 2_000_000)
+      throw new Error("情感参考音频过大，请选用小于 2MB 的短音频");
+    payload.emo_ref_audio = await dataUrl(emotion);
   }
   const d = await api(s, "tts-submit", { payload }, signal);
   return String(d.data.task_id);

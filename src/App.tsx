@@ -266,6 +266,16 @@ export default function App() {
           <span>保存</span>
         </button>
         <button
+          className="compact-button clone-entry"
+          title="打开音色克隆台"
+          onClick={() => {
+            window.location.hash = "#/clone";
+          }}
+        >
+          <Mic size={16} />
+          <span>音色克隆</span>
+        </button>
+        <button
           className="icon"
           title="API 设置"
           onClick={() => showDialog("settings")}
